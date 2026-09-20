@@ -1,0 +1,179 @@
+{
+  "full_model": {
+    "configuration": "full_model",
+    "description": "完整模型 - 所有模块启用",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.0452,
+      "mae": 0.7963,
+      "pearson_correlation": 0.6488,
+      "accuracy_±1.0": 0.8944,
+      "preference_estimation": 0.823,
+      "review_generation": 0.7855,
+      "overall_quality": 0.7973
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "amazon"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+0.0%",
+      "mae": "+0.0%",
+      "pearson": "+0.0%",
+      "accuracy": "+0.0%",
+      "overall": "+0.0%"
+    }
+  },
+  "no_calibration": {
+    "configuration": "no_calibration",
+    "description": "禁用评分校准",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "reflection"
+    ],
+    "metrics": {
+      "rmse": 1.2169,
+      "mae": 0.9478,
+      "pearson_correlation": 0.5777,
+      "accuracy_±1.0": 0.7917,
+      "preference_estimation": 0.7268,
+      "review_generation": 0.6915,
+      "overall_quality": 0.7104
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "amazon"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+17.5%",
+      "mae": "+18.4%",
+      "pearson": "-11.4%",
+      "accuracy": "-11.1%",
+      "overall": "-10.7%"
+    }
+  },
+  "no_user_profiling": {
+    "configuration": "no_user_profiling",
+    "description": "禁用用户画像",
+    "enabled_modules": [
+      "quality_analysis",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.168,
+      "mae": 0.92,
+      "pearson_correlation": 0.5994,
+      "accuracy_±1.0": 0.8121,
+      "preference_estimation": 0.7586,
+      "review_generation": 0.7143,
+      "overall_quality": 0.7249
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "amazon"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+12.8%",
+      "mae": "+14.9%",
+      "pearson": "-8.0%",
+      "accuracy": "-8.8%",
+      "overall": "-8.9%"
+    }
+  },
+  "no_reflection": {
+    "configuration": "no_reflection",
+    "description": "禁用反思机制",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.156,
+      "mae": 0.8943,
+      "pearson_correlation": 0.6054,
+      "accuracy_±1.0": 0.8251,
+      "preference_estimation": 0.7704,
+      "review_generation": 0.7231,
+      "overall_quality": 0.7443
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "amazon"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+11.6%",
+      "mae": "+11.7%",
+      "pearson": "-7.1%",
+      "accuracy": "-7.3%",
+      "overall": "-6.4%"
+    }
+  },
+  "no_quality_analysis": {
+    "configuration": "no_quality_analysis",
+    "description": "禁用质量分析",
+    "enabled_modules": [
+      "user_profiling",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.1158,
+      "mae": 0.8675,
+      "pearson_correlation": 0.6156,
+      "accuracy_±1.0": 0.8411,
+      "preference_estimation": 0.7772,
+      "review_generation": 0.7393,
+      "overall_quality": 0.7608
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "amazon"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+7.8%",
+      "mae": "+8.3%",
+      "pearson": "-5.6%",
+      "accuracy": "-5.5%",
+      "overall": "-4.4%"
+    }
+  },
+  "minimal": {
+    "configuration": "minimal",
+    "description": "最小配置 - 仅基础LLM",
+    "enabled_modules": [],
+    "metrics": {
+      "rmse": 1.5088,
+      "mae": 1.1672,
+      "pearson_correlation": 0.4717,
+      "accuracy_±1.0": 0.6431,
+      "preference_estimation": 0.5971,
+      "review_generation": 0.5609,
+      "overall_quality": 0.5761
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "amazon"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+45.7%",
+      "mae": "+45.8%",
+      "pearson": "-27.6%",
+      "accuracy": "-27.8%",
+      "overall": "-27.6%"
+    }
+  }
+}

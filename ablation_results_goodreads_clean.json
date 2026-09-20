@@ -1,0 +1,179 @@
+{
+  "full_model": {
+    "configuration": "full_model",
+    "description": "完整模型 - 所有模块启用",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 0.8998,
+      "mae": 0.6753,
+      "pearson_correlation": 0.7177,
+      "accuracy_±1.0": 0.9226,
+      "preference_estimation": 0.8653,
+      "review_generation": 0.8355,
+      "overall_quality": 0.8523
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "goodreads"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+0.0%",
+      "mae": "+0.0%",
+      "pearson": "+0.0%",
+      "accuracy": "+0.0%",
+      "overall": "+0.0%"
+    }
+  },
+  "no_calibration": {
+    "configuration": "no_calibration",
+    "description": "禁用评分校准",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "reflection"
+    ],
+    "metrics": {
+      "rmse": 1.0846,
+      "mae": 0.8026,
+      "pearson_correlation": 0.6352,
+      "accuracy_±1.0": 0.8151,
+      "preference_estimation": 0.7748,
+      "review_generation": 0.7409,
+      "overall_quality": 0.752
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "goodreads"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+19.3%",
+      "mae": "+18.3%",
+      "pearson": "-11.4%",
+      "accuracy": "-11.6%",
+      "overall": "-11.4%"
+    }
+  },
+  "no_user_profiling": {
+    "configuration": "no_user_profiling",
+    "description": "禁用用户画像",
+    "enabled_modules": [
+      "quality_analysis",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.0324,
+      "mae": 0.7735,
+      "pearson_correlation": 0.6567,
+      "accuracy_±1.0": 0.8425,
+      "preference_estimation": 0.7971,
+      "review_generation": 0.7564,
+      "overall_quality": 0.7803
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "goodreads"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+13.6%",
+      "mae": "+14.0%",
+      "pearson": "-8.4%",
+      "accuracy": "-8.7%",
+      "overall": "-8.0%"
+    }
+  },
+  "no_reflection": {
+    "configuration": "no_reflection",
+    "description": "禁用反思机制",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.0148,
+      "mae": 0.7603,
+      "pearson_correlation": 0.6648,
+      "accuracy_±1.0": 0.8609,
+      "preference_estimation": 0.8046,
+      "review_generation": 0.7761,
+      "overall_quality": 0.7913
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "goodreads"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+11.7%",
+      "mae": "+12.0%",
+      "pearson": "-7.3%",
+      "accuracy": "-6.7%",
+      "overall": "-6.7%"
+    }
+  },
+  "no_quality_analysis": {
+    "configuration": "no_quality_analysis",
+    "description": "禁用质量分析",
+    "enabled_modules": [
+      "user_profiling",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 0.99,
+      "mae": 0.7358,
+      "pearson_correlation": 0.679,
+      "accuracy_±1.0": 0.8778,
+      "preference_estimation": 0.8241,
+      "review_generation": 0.791,
+      "overall_quality": 0.8063
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "goodreads"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+8.9%",
+      "mae": "+8.4%",
+      "pearson": "-5.3%",
+      "accuracy": "-4.8%",
+      "overall": "-5.0%"
+    }
+  },
+  "minimal": {
+    "configuration": "minimal",
+    "description": "最小配置 - 仅基础LLM",
+    "enabled_modules": [],
+    "metrics": {
+      "rmse": 1.3292,
+      "mae": 0.993,
+      "pearson_correlation": 0.5176,
+      "accuracy_±1.0": 0.6684,
+      "preference_estimation": 0.6276,
+      "review_generation": 0.6006,
+      "overall_quality": 0.6126
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "goodreads"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+46.2%",
+      "mae": "+46.3%",
+      "pearson": "-27.8%",
+      "accuracy": "-27.5%",
+      "overall": "-27.8%"
+    }
+  }
+}

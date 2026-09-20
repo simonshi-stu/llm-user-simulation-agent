@@ -1,0 +1,25 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.env
+.env.*
+!.env.example
+
+# Course or competition assets are not part of this repository.
+Dataset/
+example/
+results/
+all_results_*.json
+experiment_report.md
+evaluation_results_*.json
+
+# Local editor and OS files.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

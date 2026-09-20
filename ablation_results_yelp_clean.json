@@ -1,0 +1,179 @@
+{
+  "full_model": {
+    "configuration": "full_model",
+    "description": "完整模型 - 所有模块启用",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 0.98,
+      "mae": 0.7534,
+      "pearson_correlation": 0.6923,
+      "accuracy_±1.0": 0.9071,
+      "preference_estimation": 0.8445,
+      "review_generation": 0.8016,
+      "overall_quality": 0.8233
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "yelp"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+0.0%",
+      "mae": "+0.0%",
+      "pearson": "+0.0%",
+      "accuracy": "+0.0%",
+      "overall": "+0.0%"
+    }
+  },
+  "no_calibration": {
+    "configuration": "no_calibration",
+    "description": "禁用评分校准",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "reflection"
+    ],
+    "metrics": {
+      "rmse": 1.1608,
+      "mae": 0.8807,
+      "pearson_correlation": 0.6149,
+      "accuracy_±1.0": 0.8058,
+      "preference_estimation": 0.7574,
+      "review_generation": 0.7164,
+      "overall_quality": 0.7333
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "yelp"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+19.5%",
+      "mae": "+17.9%",
+      "pearson": "-10.8%",
+      "accuracy": "-10.6%",
+      "overall": "-11.3%"
+    }
+  },
+  "no_user_profiling": {
+    "configuration": "no_user_profiling",
+    "description": "禁用用户画像",
+    "enabled_modules": [
+      "quality_analysis",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.0973,
+      "mae": 0.8509,
+      "pearson_correlation": 0.6329,
+      "accuracy_±1.0": 0.8315,
+      "preference_estimation": 0.7744,
+      "review_generation": 0.7404,
+      "overall_quality": 0.7573
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "yelp"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+13.0%",
+      "mae": "+13.9%",
+      "pearson": "-8.2%",
+      "accuracy": "-7.8%",
+      "overall": "-8.4%"
+    }
+  },
+  "no_reflection": {
+    "configuration": "no_reflection",
+    "description": "禁用反思机制",
+    "enabled_modules": [
+      "user_profiling",
+      "quality_analysis",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.0822,
+      "mae": 0.8285,
+      "pearson_correlation": 0.6406,
+      "accuracy_±1.0": 0.8371,
+      "preference_estimation": 0.7901,
+      "review_generation": 0.7488,
+      "overall_quality": 0.7713
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "yelp"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+11.4%",
+      "mae": "+10.9%",
+      "pearson": "-7.1%",
+      "accuracy": "-7.2%",
+      "overall": "-6.7%"
+    }
+  },
+  "no_quality_analysis": {
+    "configuration": "no_quality_analysis",
+    "description": "禁用质量分析",
+    "enabled_modules": [
+      "user_profiling",
+      "reflection",
+      "calibration"
+    ],
+    "metrics": {
+      "rmse": 1.0545,
+      "mae": 0.8141,
+      "pearson_correlation": 0.653,
+      "accuracy_±1.0": 0.8548,
+      "preference_estimation": 0.8082,
+      "review_generation": 0.7667,
+      "overall_quality": 0.7852
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "yelp"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+8.6%",
+      "mae": "+8.9%",
+      "pearson": "-5.3%",
+      "accuracy": "-5.2%",
+      "overall": "-5.0%"
+    }
+  },
+  "minimal": {
+    "configuration": "minimal",
+    "description": "最小配置 - 仅基础LLM",
+    "enabled_modules": [],
+    "metrics": {
+      "rmse": 1.4249,
+      "mae": 1.0926,
+      "pearson_correlation": 0.4931,
+      "accuracy_±1.0": 0.6495,
+      "preference_estimation": 0.6066,
+      "review_generation": 0.5833,
+      "overall_quality": 0.5955
+    },
+    "data_info": {
+      "evaluated_count": 300,
+      "dataset": "yelp"
+    },
+    "timestamp": "20251127_072955",
+    "delta": {
+      "rmse": "+46.7%",
+      "mae": "+46.2%",
+      "pearson": "-28.5%",
+      "accuracy": "-28.0%",
+      "overall": "-27.9%"
+    }
+  }
+}
