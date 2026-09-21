@@ -207,6 +207,11 @@ COLAB_ROOT = "/content/drive/MyDrive/society agent"  # adjust to your folder
 !python -m pip install -q -r requirements.txt
 !python -m pip install -q -r requirements-dev.txt
 
+# 3b. Colab preinstalls transformers 5.x and can leave numpy 1.x behind,
+#     both of which break `import websocietysimulator` (pipeline/StringDType).
+!python -m pip install -q "transformers>=4.40,<5" "numpy>=2.0,<3"
+!python -c "import websocietysimulator; print('framework OK')"
+
 # 4. Validate offline before spending any API budget
 !python -m pytest -q
 !python comprehensive_evaluation.py --dry-run
@@ -232,8 +237,13 @@ python comprehensive_evaluation.py \
 
 Notes:
 
+- Prefer a GPU or high-RAM runtime: importing the framework loads TensorFlow,
+  PyTorch and transformers, and the default CPU runtime can disconnect under
+  that load. The environment setup itself is verified on the default runtime
+  (107 offline tests plus `--dry-run` pass).
 - `--task-set` accepts `yelp`, `amazon` and `goodreads`; each needs its own
-  `tasks/` and `groundtruth/` folders.
+  `tasks/` and `groundtruth/` folders, and a processed data directory with
+  `item.json`, `review.json` and `user.json` for that dataset.
 - Smoke-test with `--num-tasks 3` before the full 300-task suite.
 - Keep `--max-workers` modest on Colab (5 is a good default) to avoid rate
   limits and memory pressure.
