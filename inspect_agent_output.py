@@ -6,10 +6,8 @@ Focuses on viewing what the agent produces for individual tasks
 """
 
 import os
-import sys
 import time
 from websocietysimulator import Simulator
-from websocietysimulator.agent import SimulationAgent
 
 # Import DeepSeek LLM
 import requests
@@ -138,7 +136,7 @@ def simple_inspect():
         if task_idx < 0 or task_idx >= 400:
             print("❌ Invalid index, using default: 0")
             task_idx = 0
-    except:
+    except (TypeError, ValueError):
         print("⚠️  Using default task index: 0")
         task_idx = 0
 
@@ -203,7 +201,7 @@ def simple_inspect():
             gt_stars = getattr(groundtruth, 'stars', 'N/A')
             gt_text = getattr(groundtruth, 'text', '')
 
-        print(f"\n🎯 Ground Truth:")
+        print("\n🎯 Ground Truth:")
         print(f"   Stars: {gt_stars}")
         if gt_text:
             print(f"   Review: {gt_text[:150]}...")
@@ -262,7 +260,7 @@ def simple_inspect():
                     print(f"📊 Error: {error:.2f}")
 
             # Display review
-            print(f"\n📝 Generated Review:")
+            print("\n📝 Generated Review:")
             print("-" * 70)
             print(pred_review)
             print("-" * 70)
@@ -291,7 +289,7 @@ def simple_inspect():
         choice = int(input("\nSelect (1-2): ").strip())
         if choice == 1:
             simple_inspect()
-    except:
+    except (TypeError, ValueError):
         pass
 
     print("\n👋 Goodbye!")

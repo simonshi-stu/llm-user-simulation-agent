@@ -1,0 +1,7 @@
+# pytest plus the runtime subset needed to import comprehensive_evaluation
+# in offline tests (the heavy simulator framework is intentionally excluded).
+pytest>=8.0
+numpy>=1.24,<3
+requests>=2.31
+pydantic>=2.0
+ruff>=0.6

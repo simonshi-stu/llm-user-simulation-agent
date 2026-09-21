@@ -39,6 +39,15 @@ discipline, failure handling and reproducibility.
 
 ## Future Extension Roadmap
 
+> Progress: the evaluation CLI, the offline pytest suite, the no-network
+> `--dry-run` smoke check, hybrid reference ranking, structured JSON output,
+> conditional reflection, safety checks, `score_calibration.py`, per-task
+> records with paired bootstrap tests and per-run artifacts are implemented
+> (see `docs/DEVLOG.md` and `docs/PROJECT_GUIDE.md`). Remaining gaps: the
+> calibration and statistics code has not been validated on real task assets
+> in this repo, retrieval is lexical rather than embedding-based, and no live
+> API run has been performed since the extraction.
+
 ### Priority 1: Make the experiment reproducible
 
 - Move dataset paths, task set, number of tasks, workers and model settings

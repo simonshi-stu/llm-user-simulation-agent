@@ -36,12 +36,15 @@ The required output is:
 Task
   -> EnhancedPlanning
   -> user/item/review retrieval through the simulator tool
+  -> hybrid reference-review ranking (engagement + lexical overlap + length)
+  -> prompt-injection filtering
   -> UserProfileAnalyzer
   -> ReviewQualityAnalyzer
   -> prompt construction
   -> draft generation
-  -> optional reflection
-  -> rating/review parsing and validation
+  -> conditional reflection (only when the draft fails checks)
+  -> structured JSON parsing with label-format fallback and validation
+  -> leakage check against reference reviews
   -> structured output
 ```
 
@@ -51,19 +54,25 @@ Task
   - `EnhancedPlanning`
   - `UserProfileAnalyzer`
   - `ReviewQualityAnalyzer`
-  - `ReasoningWithQualityAwareness`
-  - `ImprovedSimulationAgent`
-  - rating/review parsing and output fallback
+  - `ReasoningWithQualityAwareness` (conditional reflection)
+  - `ImprovedSimulationAgent` (JSON output contract, hybrid retrieval,
+    injection/leakage checks, no-context mode)
+  - `AgentOutput` (Pydantic validation), `normalize_stars`
+  - `DeterministicBaseline` / `DeterministicSimulationAgent`
 - `comprehensive_evaluation.py`
-  - experiment configuration
-  - simulator execution
+  - experiment configuration and CLI (`--dry-run`, `--seed`, `--experiment`)
+  - simulator execution and LLM usage tracking
   - RMSE, MAE, accuracy, distribution and correlation metrics
-  - intermediate result persistence
+  - per-task records, paired bootstrap tests, run artifacts
   - comparison and ablation report generation
+- `score_calibration.py`
+  - bias and linear score calibrators with a validation split
 - `inspect_agent_output.py`
   - interactive single-task inspection
   - predicted-vs-ground-truth comparison
   - generated review inspection
+- `tests/`
+  - 107 offline tests covering the agent, evaluation and calibration paths
 - `final_project.ipynb`
   - course experiment notebook and execution record
 - `ablation_results_*_clean.json`
@@ -119,6 +128,23 @@ $env:DEEPSEEK_API_KEY = "your-key"
 
 Do not commit `.env` files, API keys, datasets or generated results.
 
+## Running Tests
+
+The 107 offline tests cover the agent workflow (with fakes), profile
+statistics, quality thresholds, hybrid reference ranking, injection and
+leakage checks, conditional reflection, structured output, calibration,
+per-task records and paired bootstrap tests. They require neither the
+simulator framework nor an API key:
+
+```bash
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\ruff.exe check .
+```
+
+CI runs the same lint, tests and a `--dry-run` smoke check on every push
+(`.github/workflows/ci.yml`).
+
 ## Data Layout
 
 The task data is not included in this repository. The simulator harness
@@ -145,27 +171,51 @@ example/
 After installing the dependency and restoring authorized task assets:
 
 ```bash
-py comprehensive_evaluation.py
+# Validate the configuration without API calls or the simulator framework
+py comprehensive_evaluation.py --dry-run
+
+# Run the ablation suite (defaults to the yelp task set, 10 tasks, 5 workers)
+py comprehensive_evaluation.py --task-set yelp --num-tasks 10 --max-workers 5
+py comprehensive_evaluation.py --experiment Baseline Full --output-dir results
+
 py inspect_agent_output.py
 ```
 
-The scripts are preserved from the course experiment and currently assume the
-original simulator task layout. A future cleanup should move paths and model
-settings into a configuration file or CLI arguments.
+Every path, task count, worker count and model setting is now a CLI argument;
+see `py comprehensive_evaluation.py --help`. `--dry-run` neither imports the
+simulator framework nor calls the LLM, so it doubles as a no-network smoke
+check. `inspect_agent_output.py` is preserved from the course experiment and
+still assumes the original simulator task layout and an API key.
 
 ## Current Scope and Honest Limitations
 
-The current personal implementation directly contains user profiling, review
-quality analysis, optional memory, reflection and output parsing. It does not
-contain a standalone score-calibration class, a production retrieval system,
-or a statistically rigorous significance test.
+Implemented and unit-tested offline:
 
-The evaluation source includes a simplified relative-difference helper named
-`calculate_statistical_significance`; it should not be described as a real
-t-test until it is replaced with per-task statistical testing.
+- user profiling, review quality analysis, optional memory, conditional
+  reflection and structured output parsing with label-format fallback;
+- hybrid reference-review ranking (engagement + lexical overlap + length),
+  prompt-injection filtering and generated-review leakage checks;
+- a deterministic baseline and a no-context LLM baseline in the ablation suite;
+- `score_calibration.py` with bias and linear calibrators;
+- per-task error records and a paired bootstrap test replacing the old
+  relative-difference helper;
+- per-run artifacts (`metadata.json`, per-task JSON, comparisons) and LLM
+  usage counters.
 
-See `docs/PROJECT_SCOPE.md` for the ownership inventory, technical strengths
-and extension roadmap.
+Honest limitations that remain:
+
+- the calibration module and the paired bootstrap have not been validated on
+  real model outputs in this repository because the course task assets and a
+  working API key are absent; only offline tests exist;
+- reference selection is a transparent lexical hybrid, not embedding-based
+  semantic retrieval, and no embedding endpoint is wired in;
+- the archived Yelp/Amazon/Goodreads numbers come from the earlier course run
+  and were not produced by this cleaned-up code path;
+- per-task latency cannot be measured through the simulator API; only
+  per-experiment wall time and aggregate LLM call latency are saved.
+
+See `docs/PROJECT_SCOPE.md` for the ownership inventory, `docs/PROJECT_GUIDE.md`
+for the full architecture and `docs/INTERVIEW_GUIDE.md` for talking points.
 
 ## Attribution
 

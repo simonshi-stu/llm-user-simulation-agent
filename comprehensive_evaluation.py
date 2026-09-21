@@ -12,22 +12,17 @@ comprehensive_evaluation.py
 6. 详细的结果分析
 """
 
+import argparse
 import sys
 import os
 import json
 import time
 import numpy as np
 from datetime import datetime
-from collections import defaultdict
-from typing import Dict, List, Any
-import matplotlib.pyplot as plt
-import seaborn as sns
+from typing import Dict, List
 
 # 添加当前目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from websocietysimulator import Simulator
-from improved_agent_with_quality import ImprovedSimulationAgent
 
 # ============================
 # DeepSeek LLM 封装
@@ -71,18 +66,16 @@ class DeepSeekEmbeddingModel:
 
 class DeepSeekLLM:
     def __init__(self, api_key: str, base_url: str = "https://api.deepseek.com/v1",
-                 chat_model: str = "deepseek-chat", embedding_model: str = "deepseek-embedding"):
+                 chat_model: str = "deepseek-chat", embedding_model: str = "deepseek-embedding",
+                 seed: int = None):
         self.api_key = api_key
         self.base_url = base_url
         self.chat_model = chat_model
         self.embedding_model = embedding_model
+        self.seed = seed
+        self.usage = {"calls": 0, "errors": 0, "latency_seconds": 0.0}
 
-    def __call__(self, messages, temperature=0.7, max_tokens=800):
-        url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+    def _build_payload(self, messages, temperature, max_tokens):
         payload = {
             "model": self.chat_model,
             "messages": messages,
@@ -90,14 +83,33 @@ class DeepSeekLLM:
             "max_tokens": max_tokens,
             "stream": False,
         }
+        if self.seed is not None:
+            payload["seed"] = self.seed
+        return payload
+
+    def usage_stats(self) -> Dict:
+        return dict(self.usage)
+
+    def __call__(self, messages, temperature=0.7, max_tokens=800):
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        payload = self._build_payload(messages, temperature, max_tokens)
+        started = time.time()
+        self.usage["calls"] += 1
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=60)
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
         except Exception as e:
+            self.usage["errors"] += 1
             print(f"❌ Chat API 错误: {e}")
             return "（API 错误）"
+        finally:
+            self.usage["latency_seconds"] += time.time() - started
 
     def get_embedding_model(self):
         return DeepSeekEmbeddingModel(
@@ -114,50 +126,80 @@ class DeepSeekLLM:
 class ExperimentConfig:
     """实验配置"""
     def __init__(self, name: str, enable_reflection: bool, use_memory: bool,
-                 max_reference_reviews: int, description: str = ""):
+                 max_reference_reviews: int, description: str = "",
+                 include_context: bool = True, agent_kind: str = "llm"):
         self.name = name
         self.enable_reflection = enable_reflection
         self.use_memory = use_memory
         self.max_reference_reviews = max_reference_reviews
         self.description = description
+        self.include_context = include_context
+        self.agent_kind = agent_kind
 
     def __str__(self):
-        return f"{self.name}: reflection={self.enable_reflection}, memory={self.use_memory}, refs={self.max_reference_reviews}"
+        return (
+            f"{self.name}: reflection={self.enable_reflection}, "
+            f"memory={self.use_memory}, refs={self.max_reference_reviews}, "
+            f"context={self.include_context}, agent={self.agent_kind}"
+        )
 
 
 # ============================
 # 评估指标计算
 # ============================
 
+def extract_prediction(output) -> float:
+    """Return the predicted stars from a simulator output, or None."""
+    if not output or not isinstance(output, dict):
+        return None
+    if "output" in output and isinstance(output["output"], dict):
+        value = output["output"].get("stars")
+    else:
+        value = output.get("stars")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_per_task_records(outputs: List[Dict],
+                           groundtruths: List[Dict]) -> List[Dict]:
+    """Pair predictions with ground truth into per-task error records."""
+    records = []
+    for index, (output, groundtruth) in enumerate(zip(outputs, groundtruths)):
+        if not groundtruth or "stars" not in groundtruth:
+            continue
+        prediction = extract_prediction(output)
+        actual = float(groundtruth["stars"])
+        record = {
+            "index": index,
+            "predicted": prediction,
+            "actual": actual,
+            "error": None,
+            "squared_error": None,
+        }
+        if prediction is not None:
+            record["error"] = abs(prediction - actual)
+            record["squared_error"] = (prediction - actual) ** 2
+        records.append(record)
+    return records
+
+
 def calculate_additional_metrics(outputs: List[Dict], groundtruths: List[Dict]) -> Dict[str, float]:
     """
     计算额外的评估指标（补充 simulator.evaluate()）
     """
-    metrics = {}
-
-    # 提取预测值和真实值
-    predicted_stars = []
-    actual_stars = []
-
-    for out, gt in zip(outputs, groundtruths):
-        if out and isinstance(out, dict):
-            # 处理嵌套结构
-            if "output" in out and isinstance(out["output"], dict):
-                pred = out["output"].get("stars")
-            else:
-                pred = out.get("stars")
-
-            if pred is not None and "stars" in gt:
-                predicted_stars.append(float(pred))
-                actual_stars.append(float(gt["stars"]))
-
-    if not predicted_stars:
+    records = build_per_task_records(outputs, groundtruths)
+    valid = [record for record in records if record["error"] is not None]
+    if not valid:
         return {"error": "No valid predictions"}
 
-    predicted_stars = np.array(predicted_stars)
-    actual_stars = np.array(actual_stars)
+    predicted_stars = np.array([record["predicted"] for record in valid])
+    actual_stars = np.array([record["actual"] for record in valid])
 
-    # 基础指标
+    metrics = {}
     metrics["accuracy_exact"] = np.mean(predicted_stars == actual_stars)
     metrics["accuracy_±0.5"] = np.mean(np.abs(predicted_stars - actual_stars) <= 0.5)
     metrics["accuracy_±1.0"] = np.mean(np.abs(predicted_stars - actual_stars) <= 1.0)
@@ -173,27 +215,51 @@ def calculate_additional_metrics(outputs: List[Dict], groundtruths: List[Dict]) 
         correlation = np.corrcoef(predicted_stars, actual_stars)[0, 1]
         metrics["pearson_correlation"] = float(correlation)
 
+    metrics["num_valid_predictions"] = len(valid)
     return metrics
 
 
-def calculate_statistical_significance(results1: Dict, results2: Dict, metric: str = "rmse") -> Dict:
-    """
-    计算两组结果之间的统计显著性（简化版 t-test）
-    """
-    # 这里简化处理，实际应该保存每个任务的误差然后做 t-test
-    diff = abs(results1.get(metric, 0) - results2.get(metric, 0))
+def paired_bootstrap_test(records_a: List[Dict], records_b: List[Dict],
+                          metric: str = "error", n_boot: int = 5000,
+                          seed: int = 0) -> Dict:
+    """Paired bootstrap test over per-task records.
 
-    # 简单的相对改进百分比
-    if results2.get(metric, 0) > 0:
-        improvement = (results2.get(metric, 0) - results1.get(metric, 0)) / results2.get(metric, 0) * 100
-    else:
-        improvement = 0
+    The two record lists must share the same task ordering and length.
+    The difference is computed as mean(metric_a) - mean(metric_b), so a
+    negative value means ``records_a`` has smaller errors.
+    """
+    if len(records_a) != len(records_b):
+        raise ValueError("record lists must have the same length")
+    if not records_a:
+        raise ValueError("record lists must not be empty")
+
+    try:
+        diffs = np.array([
+            float(a[metric]) - float(b[metric])
+            for a, b in zip(records_a, records_b)
+        ])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"cannot compute metric '{metric}': {exc}") from exc
+
+    rng = np.random.default_rng(seed)
+    n = len(diffs)
+    samples = rng.choice(diffs, size=(n_boot, n), replace=True)
+    boot_means = samples.mean(axis=1)
+    observed = float(diffs.mean())
+
+    lower, upper = np.percentile(boot_means, [2.5, 97.5])
+    prob_positive = float(np.mean(boot_means >= 0))
+    prob_negative = float(np.mean(boot_means <= 0))
+    p_value = min(1.0, 2 * min(prob_positive, prob_negative))
 
     return {
         "metric": metric,
-        "diff": diff,
-        "improvement_%": improvement,
-        "better": results1.get(metric, float('inf')) < results2.get(metric, float('inf'))
+        "n_tasks": n,
+        "mean_difference": observed,
+        "ci95_low": float(lower),
+        "ci95_high": float(upper),
+        "p_value": p_value,
+        "n_boot": n_boot,
     }
 
 
@@ -204,15 +270,34 @@ def calculate_statistical_significance(results1: Dict, results2: Dict, metric: s
 class ExperimentRunner:
     """实验运行器 - 负责运行所有实验配置"""
 
-    def __init__(self, data_dir: str, task_set: str, api_key: str, num_tasks: int = 100):
+    def __init__(self, data_dir: str, task_set: str, api_key: str,
+                 num_tasks: int = 100, max_workers: int = 5,
+                 output_dir: str = "results", chat_model: str = "deepseek-chat",
+                 base_url: str = "https://api.deepseek.com/v1",
+                 seed: int = None):
         self.data_dir = data_dir
         self.task_set = task_set
         self.api_key = api_key
         self.num_tasks = num_tasks
+        self.max_workers = max_workers
+        self.output_dir = output_dir
+        self.chat_model = chat_model
+        self.base_url = base_url
+        self.seed = seed
+        self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_dir = os.path.join(output_dir, f"run_{self.run_id}")
         self.results = {}
+        self.per_task_records = {}
 
     def run_experiment(self, config: ExperimentConfig) -> Dict:
         """运行单个实验配置"""
+        # Imported lazily so --dry-run works without the simulator framework.
+        from websocietysimulator import Simulator
+        from improved_agent_with_quality import (
+            DeterministicSimulationAgent,
+            ImprovedSimulationAgent,
+        )
+
         print(f"\n{'='*80}")
         print(f"🧪 运行实验: {config.name}")
         print(f"{'='*80}")
@@ -232,17 +317,29 @@ class ExperimentRunner:
         )
 
         # 配置 Agent
-        class ConfiguredAgent(ImprovedSimulationAgent):
-            def __init__(self, llm):
-                super().__init__(
-                    llm=llm,
-                    enable_reflection=config.enable_reflection,
-                    use_memory=config.use_memory,
-                    max_reference_reviews=config.max_reference_reviews
-                )
+        if config.agent_kind == "deterministic":
+            agent_class = DeterministicSimulationAgent
+        else:
+            class ConfiguredAgent(ImprovedSimulationAgent):
+                def __init__(self, llm):
+                    super().__init__(
+                        llm=llm,
+                        enable_reflection=config.enable_reflection,
+                        use_memory=config.use_memory,
+                        max_reference_reviews=config.max_reference_reviews,
+                        include_context=config.include_context
+                    )
 
-        simulator.set_agent(ConfiguredAgent)
-        simulator.set_llm(DeepSeekLLM(api_key=self.api_key))
+            agent_class = ConfiguredAgent
+
+        llm_client = DeepSeekLLM(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            chat_model=self.chat_model,
+            seed=self.seed
+        )
+        simulator.set_agent(agent_class)
+        simulator.set_llm(llm_client)
 
         # 运行模拟
         print(f"\n⚙️  运行 {self.num_tasks} 个任务...")
@@ -251,10 +348,16 @@ class ExperimentRunner:
         outputs = simulator.run_simulation(
             number_of_tasks=self.num_tasks,
             enable_threading=True,
-            max_workers=5
+            max_workers=self.max_workers
         )
 
         elapsed_time = time.time() - start_time
+
+        # 逐任务结果持久化
+        groundtruths = self._extract_groundtruths(simulator)
+        records = build_per_task_records(outputs, groundtruths)
+        self.per_task_records[config.name] = records
+        self._save_per_task_records(config.name, records)
 
         print(f"✅ 完成！用时: {elapsed_time:.2f}秒")
         print(f"   平均每任务: {elapsed_time/self.num_tasks:.2f}秒")
@@ -264,34 +367,28 @@ class ExperimentRunner:
         try:
             eval_results = simulator.evaluate()
 
-            # 计算额外指标
-            # 尝试不同的属性名称
-            try:
-                if hasattr(simulator, 'groundtruth_data'):
-                    groundtruths = simulator.groundtruth_data[:self.num_tasks]
-                elif hasattr(simulator, 'groundtruth_pool'):
-                    groundtruths = simulator.groundtruth_pool[:self.num_tasks]
-                elif hasattr(simulator, 'groundtruths'):
-                    groundtruths = simulator.groundtruths[:self.num_tasks]
-                else:
-                    groundtruths = []
-
-                if groundtruths:
-                    additional_metrics = calculate_additional_metrics(outputs, groundtruths)
+            if groundtruths:
+                try:
+                    additional_metrics = calculate_additional_metrics(
+                        outputs, groundtruths
+                    )
                     eval_results.update(additional_metrics)
-            except Exception as e:
-                print(f"⚠️ 无法计算额外指标: {e}")
+                except Exception as e:
+                    print(f"⚠️ 无法计算额外指标: {e}")
 
             # 添加元数据
             eval_results["config"] = {
                 "name": config.name,
                 "enable_reflection": config.enable_reflection,
                 "use_memory": config.use_memory,
-                "max_reference_reviews": config.max_reference_reviews
+                "max_reference_reviews": config.max_reference_reviews,
+                "include_context": config.include_context,
+                "agent_kind": config.agent_kind
             }
             eval_results["num_tasks"] = self.num_tasks
             eval_results["elapsed_time"] = elapsed_time
             eval_results["timestamp"] = datetime.now().isoformat()
+            eval_results["llm_usage"] = llm_client.usage_stats()
 
             return eval_results
 
@@ -306,6 +403,8 @@ class ExperimentRunner:
         print("\n" + "🚀"*40)
         print("开始运行完整实验套件")
         print("🚀"*40 + "\n")
+
+        self._save_run_metadata(configs)
 
         for config in configs:
             try:
@@ -329,13 +428,68 @@ class ExperimentRunner:
 
     def _save_intermediate_results(self, config_name: str):
         """保存中间结果"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"results_{config_name}_{timestamp}.json"
+        os.makedirs(self.run_dir, exist_ok=True)
+        filename = os.path.join(self.run_dir, f"results_{config_name}.json")
 
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(self.results[config_name], f, indent=4, ensure_ascii=False)
 
         print(f"💾 中间结果已保存: {filename}")
+
+    def _extract_groundtruths(self, simulator) -> List[Dict]:
+        """兼容不同版本的 simulator groundtruth 属性名"""
+        for attribute in ('groundtruth_data', 'groundtruth_pool', 'groundtruths'):
+            if hasattr(simulator, attribute):
+                return getattr(simulator, attribute)[:self.num_tasks]
+        return []
+
+    def _save_per_task_records(self, config_name: str, records: List[Dict]):
+        """保存逐任务预测与误差"""
+        os.makedirs(self.run_dir, exist_ok=True)
+        filename = os.path.join(self.run_dir, f"per_task_{config_name}.json")
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(records, f, indent=4, ensure_ascii=False)
+        print(f"💾 逐任务结果已保存: {filename} ({len(records)} 条)")
+
+    def build_run_metadata(self, configs: List[ExperimentConfig]) -> Dict:
+        """记录运行级元数据，保证实验可追溯"""
+        return {
+            "run_id": self.run_id,
+            "timestamp": datetime.now().isoformat(),
+            "data_dir": self.data_dir,
+            "task_set": self.task_set,
+            "num_tasks": self.num_tasks,
+            "max_workers": self.max_workers,
+            "chat_model": self.chat_model,
+            "base_url": self.base_url,
+            "seed": self.seed,
+            "output_dir": self.output_dir,
+            "experiments": [config.name for config in configs],
+        }
+
+    def _save_run_metadata(self, configs: List[ExperimentConfig]):
+        os.makedirs(self.run_dir, exist_ok=True)
+        filename = os.path.join(self.run_dir, "metadata.json")
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(
+                self.build_run_metadata(configs), f,
+                indent=4, ensure_ascii=False
+            )
+        print(f"💾 运行元数据已保存: {filename}")
+
+    def compare(self, name_a: str, name_b: str, metric: str = "error") -> Dict:
+        """对两个配置做配对 bootstrap 检验（需要同一批任务顺序）"""
+        if (
+            name_a not in self.per_task_records
+            or name_b not in self.per_task_records
+        ):
+            raise KeyError(f"missing per-task records for {name_a} or {name_b}")
+        return paired_bootstrap_test(
+            self.per_task_records[name_a],
+            self.per_task_records[name_b],
+            metric=metric,
+            seed=self.seed or 0,
+        )
 
 
 # ============================
@@ -425,7 +579,7 @@ class ResultsAnalyzer:
         best_sent = max((r.get("sentiment_alignment", 0), name)
                        for name, r in self.results.items() if "error" not in r)
 
-        analysis += f"### 最佳配置\n\n"
+        analysis += "### 最佳配置\n\n"
         analysis += f"- **最低 RMSE**: {best_rmse[1]} ({best_rmse[0]:.4f})\n"
         analysis += f"- **最低 MAE**: {best_mae[1]} ({best_mae[0]:.4f})\n"
         analysis += f"- **最高 Sentiment Alignment**: {best_sent[1]} ({best_sent[0]:.4f})\n"
@@ -440,7 +594,7 @@ class ResultsAnalyzer:
         # 实验概述
         report += "## 📋 实验概述\n\n"
         report += f"- **总实验数**: {len(self.results)}\n"
-        report += f"- **数据集**: Yelp\n"
+        report += "- **数据集**: Yelp\n"
         report += f"- **每个实验的任务数**: {list(self.results.values())[0].get('num_tasks', 'N/A')}\n\n"
 
         # 添加各个分析部分
@@ -457,27 +611,20 @@ class ResultsAnalyzer:
 
 
 # ============================
-# 主函数
+# CLI
 # ============================
 
-def main():
-    """主函数 - 运行完整的实验套件"""
-
-    # ============================================
-    # 配置参数
-    # ============================================
-
-    DATA_DIR = "Dataset"
-    TASK_SET = "yelp"
-    API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")  # set DEEPSEEK_API_KEY before running
-    NUM_TASKS = 10  # 每个实验的任务数（建议 100-200）
-
-    # ============================================
-    # 定义实验配置
-    # ============================================
-
-    experiments = [
-        # Baseline: 最简单的配置
+def default_experiments() -> List[ExperimentConfig]:
+    """默认实验配置：确定性/无上下文 baseline + full + 三个消融"""
+    return [
+        ExperimentConfig(
+            name="Deterministic",
+            enable_reflection=False,
+            use_memory=False,
+            max_reference_reviews=0,
+            description="Deterministic baseline: user's historical average",
+            agent_kind="deterministic"
+        ),
         ExperimentConfig(
             name="Baseline",
             enable_reflection=False,
@@ -485,8 +632,14 @@ def main():
             max_reference_reviews=3,
             description="Simple baseline without reflection or memory"
         ),
-
-        # 完整配置: 所有功能都开启
+        ExperimentConfig(
+            name="No_Context",
+            enable_reflection=False,
+            use_memory=False,
+            max_reference_reviews=0,
+            description="LLM baseline without profile or reference reviews",
+            include_context=False
+        ),
         ExperimentConfig(
             name="Full",
             enable_reflection=True,
@@ -494,8 +647,6 @@ def main():
             max_reference_reviews=5,
             description="Full model with all features enabled"
         ),
-
-        # Ablation 1: 移除反思
         ExperimentConfig(
             name="No_Reflection",
             enable_reflection=False,
@@ -503,8 +654,6 @@ def main():
             max_reference_reviews=5,
             description="Ablation: Remove reflection"
         ),
-
-        # Ablation 2: 移除记忆
         ExperimentConfig(
             name="No_Memory",
             enable_reflection=True,
@@ -512,8 +661,6 @@ def main():
             max_reference_reviews=5,
             description="Ablation: Remove memory"
         ),
-
-        # Ablation 3: 减少参考评论
         ExperimentConfig(
             name="Fewer_References",
             enable_reflection=True,
@@ -523,18 +670,119 @@ def main():
         ),
     ]
 
-    # ============================================
-    # 运行实验
-    # ============================================
+
+def build_parser() -> argparse.ArgumentParser:
+    """CLI 参数定义"""
+    parser = argparse.ArgumentParser(
+        description="Run the CS245 Track A ablation suite."
+    )
+    parser.add_argument(
+        "--data-dir", default="Dataset",
+        help="Simulator dataset root directory (default: Dataset)."
+    )
+    parser.add_argument(
+        "--task-set", default="yelp",
+        choices=("yelp", "amazon", "goodreads"),
+        help="Task/groundtruth set under example/track1/ (default: yelp)."
+    )
+    parser.add_argument(
+        "--num-tasks", type=int, default=10,
+        help="Number of tasks per experiment (default: 10)."
+    )
+    parser.add_argument(
+        "--max-workers", type=int, default=5,
+        help="Threading workers passed to run_simulation (default: 5)."
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="Optional LLM sampling seed, recorded with the run."
+    )
+    parser.add_argument(
+        "--api-key", default=None,
+        help="LLM API key; falls back to DEEPSEEK_API_KEY."
+    )
+    parser.add_argument(
+        "--chat-model", default="deepseek-chat",
+        help="Chat model name (default: deepseek-chat)."
+    )
+    parser.add_argument(
+        "--base-url", default="https://api.deepseek.com/v1",
+        help="LLM API base URL."
+    )
+    parser.add_argument(
+        "--output-dir", default="results",
+        help="Directory for reports and JSON results (default: results)."
+    )
+    parser.add_argument(
+        "--experiment", nargs="*", default=None,
+        help="Experiment names to run (default: all)."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Validate settings and exit without importing the framework "
+             "or calling the LLM."
+    )
+    return parser
+
+
+def print_dry_run(args, experiments: List[ExperimentConfig],
+                  api_key_configured: bool) -> None:
+    """打印将要执行的配置，不触发任何 API 调用"""
+    print("DRY RUN - no LLM calls will be made")
+    print(f"  data_dir    : {args.data_dir}")
+    print(f"  task_set    : {args.task_set}")
+    print(f"  num_tasks   : {args.num_tasks}")
+    print(f"  max_workers : {args.max_workers}")
+    print(f"  chat_model  : {args.chat_model}")
+    print(f"  base_url    : {args.base_url}")
+    print(f"  output_dir  : {args.output_dir}")
+    print(f"  api_key     : {'configured' if api_key_configured else 'missing'}")
+    print(f"  experiments : {len(experiments)}")
+    for config in experiments:
+        print(f"    - {config.name}: {config}")
+
+
+def main(argv=None) -> int:
+    """主函数 - 解析 CLI 并运行实验套件"""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    experiments = default_experiments()
+    if args.experiment:
+        known = {config.name for config in experiments}
+        unknown = [name for name in args.experiment if name not in known]
+        if unknown:
+            parser.error(
+                f"unknown experiment(s): {', '.join(unknown)}. "
+                f"Available: {', '.join(sorted(known))}"
+            )
+        selected = set(args.experiment)
+        experiments = [c for c in experiments if c.name in selected]
+
+    api_key = args.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+
+    if args.dry_run:
+        print_dry_run(args, experiments, api_key_configured=bool(api_key))
+        return 0
+
+    if not api_key:
+        print("ERROR: no API key. Pass --api-key or set DEEPSEEK_API_KEY.")
+        return 2
 
     runner = ExperimentRunner(
-        data_dir=DATA_DIR,
-        task_set=TASK_SET,
-        api_key=API_KEY,
-        num_tasks=NUM_TASKS
+        data_dir=args.data_dir,
+        task_set=args.task_set,
+        api_key=api_key,
+        num_tasks=args.num_tasks,
+        max_workers=args.max_workers,
+        output_dir=args.output_dir,
+        chat_model=args.chat_model,
+        base_url=args.base_url,
+        seed=args.seed
     )
 
     results = runner.run_all_experiments(experiments)
+    os.makedirs(runner.run_dir, exist_ok=True)
 
     # ============================================
     # 分析结果
@@ -542,19 +790,35 @@ def main():
 
     analyzer = ResultsAnalyzer(results)
 
-    # 生成并保存报告
-    report_file = analyzer.save_full_report()
+    report_file = analyzer.save_full_report(
+        filename=os.path.join(runner.run_dir, "experiment_report.md")
+    )
 
-    # 打印总结
     print("\n" + "="*80)
     print("📊 实验总结")
     print("="*80)
     print(analyzer.generate_comparison_table())
     print(analyzer.generate_statistical_analysis())
 
-    # 保存原始结果（JSON格式）
+    comparisons = {}
+    for baseline_name in ("Deterministic", "Baseline"):
+        if (
+            "Full" in runner.per_task_records
+            and baseline_name in runner.per_task_records
+        ):
+            key = f"Full_vs_{baseline_name}"
+            comparisons[key] = runner.compare("Full", baseline_name)
+            print(f"\n📈 配对 bootstrap（{key}, metric=error）:")
+            print(json.dumps(comparisons[key], indent=4, ensure_ascii=False))
+
+    if comparisons:
+        comparison_file = os.path.join(runner.run_dir, "comparisons.json")
+        with open(comparison_file, 'w', encoding='utf-8') as f:
+            json.dump(comparisons, f, indent=4, ensure_ascii=False)
+        print(f"💾 显著性检验已保存: {comparison_file}")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_file = f"all_results_{timestamp}.json"
+    json_file = os.path.join(runner.run_dir, f"all_results_{timestamp}.json")
     with open(json_file, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=4, ensure_ascii=False)
     print(f"\n💾 原始结果已保存: {json_file}")
@@ -562,11 +826,8 @@ def main():
     print("\n" + "🎉"*40)
     print("实验评估完成！")
     print("🎉"*40)
-    print("\n📝 下一步:")
-    print("1. 查看完整报告: experiment_report.md")
-    print("2. 查看原始数据: all_results_*.json")
-    print("3. 将结果整理到项目报告中")
-    print("4. 准备演示材料和图表")
+    print(f"\n📝 报告: {report_file}")
+    return 0
 
 
 if __name__ == "__main__":
@@ -576,4 +837,4 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%H:%M:%S"
     )
-    main()
+    sys.exit(main())
