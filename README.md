@@ -207,9 +207,11 @@ COLAB_ROOT = "/content/drive/MyDrive/society agent"  # adjust to your folder
 !python -m pip install -q -r requirements.txt
 !python -m pip install -q -r requirements-dev.txt
 
-# 3b. Colab preinstalls transformers 5.x and can leave numpy 1.x behind,
-#     both of which break `import websocietysimulator` (pipeline/StringDType).
-!python -m pip install -q "transformers>=4.40,<5" "numpy>=2.0,<3"
+# 3b. The framework (1.0.0a30) pins legacy langchain/openai/
+#     sentence-transformers versions that conflict with what Colab
+#     preinstalls, and it needs lmdb. Install the whole legacy set in one
+#     command so pip resolves it in a single pass:
+!python -m pip install -q "lmdb<2.0,>=1.6.2" "langchain<0.4,>=0.3.13" "langchain-openai<0.3,>=0.2.14" "langchain-chroma<0.2,>=0.1.4" "openai<2.0,>=1.58.1" "sentence-transformers<4.0,>=3.3.1" "transformers>=4.40,<5" "numpy>=2.0,<3"
 !python -c "import websocietysimulator; print('framework OK')"
 
 # 4. Validate offline before spending any API budget
