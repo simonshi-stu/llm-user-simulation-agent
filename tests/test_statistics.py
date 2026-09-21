@@ -73,3 +73,35 @@ class TestPairedBootstrap:
             paired_bootstrap_test(
                 [{"error": 1.0}], [{"error": 1.0}], metric="missing"
             )
+
+
+class TestResultsAnalyzer:
+    def test_statistical_analysis_handles_empty_results(self):
+        from comprehensive_evaluation import ResultsAnalyzer
+
+        analyzer = ResultsAnalyzer({})
+
+        analysis = analyzer.generate_statistical_analysis()
+
+        assert "没有可用" in analysis
+
+    def test_statistical_analysis_lists_failed_configs(self):
+        from comprehensive_evaluation import ResultsAnalyzer
+
+        analyzer = ResultsAnalyzer({"Baseline": {"error": "boom"}})
+
+        analysis = analyzer.generate_statistical_analysis()
+
+        assert "Baseline" in analysis
+
+    def test_full_report_survives_all_failed_results(self, tmp_path):
+        from comprehensive_evaluation import ResultsAnalyzer
+
+        analyzer = ResultsAnalyzer({"Baseline": {"error": "boom"}})
+
+        report_path = analyzer.save_full_report(
+            filename=str(tmp_path / "report.md")
+        )
+
+        assert (tmp_path / "report.md").exists()
+        assert report_path == str(tmp_path / "report.md")

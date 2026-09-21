@@ -579,16 +579,33 @@ class ResultsAnalyzer:
         return analysis
 
     def generate_statistical_analysis(self) -> str:
-        """生成统计分析"""
+        """生成统计分析（全部实验失败时给出说明而不是崩溃）"""
         analysis = "\n## 📈 统计分析\n\n"
 
+        valid = {
+            name: result
+            for name, result in self.results.items()
+            if "error" not in result and "rmse" in result
+        }
+        if not valid:
+            failed = [
+                name for name, result in self.results.items() if "error" in result
+            ]
+            analysis += "没有可用的实验结果。\n"
+            if failed:
+                analysis += f"- 失败的配置: {', '.join(failed)}\n"
+            return analysis
+
         # 找到最好的配置
-        best_rmse = min((r.get("rmse", float('inf')), name)
-                       for name, r in self.results.items() if "error" not in r)
-        best_mae = min((r.get("mae", float('inf')), name)
-                      for name, r in self.results.items() if "error" not in r)
-        best_sent = max((r.get("sentiment_alignment", 0), name)
-                       for name, r in self.results.items() if "error" not in r)
+        best_rmse = min(
+            (r.get("rmse", float('inf')), name) for name, r in valid.items()
+        )
+        best_mae = min(
+            (r.get("mae", float('inf')), name) for name, r in valid.items()
+        )
+        best_sent = max(
+            (r.get("sentiment_alignment", 0), name) for name, r in valid.items()
+        )
 
         analysis += "### 最佳配置\n\n"
         analysis += f"- **最低 RMSE**: {best_rmse[1]} ({best_rmse[0]:.4f})\n"
@@ -603,10 +620,11 @@ class ResultsAnalyzer:
         report += f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
         # 实验概述
+        first_result = next(iter(self.results.values()), {})
         report += "## 📋 实验概述\n\n"
         report += f"- **总实验数**: {len(self.results)}\n"
         report += "- **数据集**: Yelp\n"
-        report += f"- **每个实验的任务数**: {list(self.results.values())[0].get('num_tasks', 'N/A')}\n\n"
+        report += f"- **每个实验的任务数**: {first_result.get('num_tasks', 'N/A')}\n\n"
 
         # 添加各个分析部分
         report += self.generate_comparison_table()

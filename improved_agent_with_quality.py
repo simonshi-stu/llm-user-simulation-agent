@@ -11,18 +11,19 @@ import logging
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-# 尝试从 websocietysimulator 导入（如果环境完整，这是优先方案）
+# 1) 框架基类：Simulator 会校验 Agent 必须继承真实的 SimulationAgent
 try:
     from websocietysimulator.agent import SimulationAgent
     from websocietysimulator.llm import LLMBase
-    from websocietysimulator.agent.modules.planning_modules import PlanningBase
-    from websocietysimulator.agent.modules.reasoning_modules import ReasoningBase
     FRAMEWORK_BASE_CLASSES_AVAILABLE = True
     logging.info("Using websocietysimulator base classes.")
 except Exception as e:
     # 如果导入失败（比如本地没有安装 websocietysimulator），
     # 就用本地的简化版基类，这样这个文件仍然可以被 import。
-    logging.warning(f"Failed to import websocietysimulator, using local stubs instead: {e}")
+    logging.warning(
+        f"Failed to import websocietysimulator base classes, "
+        f"using local stubs instead: {e}"
+    )
     FRAMEWORK_BASE_CLASSES_AVAILABLE = False
 
     class SimulationAgent:
@@ -34,6 +35,21 @@ except Exception as e:
     class LLMBase:
         def __call__(self, messages, **kwargs):
             raise NotImplementedError("LLMBase.__call__ is not implemented.")
+
+# 2) 规划/推理基类：导入时必须经过 websocietysimulator.agent.modules 包，
+#    而它的 __init__ 会加载 langchain-chroma（在 Colab 上与 numpy 2 冲突）。
+#    单独降级：拿不到真实基类时用等价本地基类，Agent 仍然继承真实的
+#    SimulationAgent，不会被 Simulator 拒绝。
+try:
+    from websocietysimulator.agent.modules.planning_modules import PlanningBase
+    from websocietysimulator.agent.modules.reasoning_modules import ReasoningBase
+    FRAMEWORK_MODULES_AVAILABLE = True
+except Exception as e:
+    logging.warning(
+        f"Framework planning/reasoning modules unavailable, "
+        f"using local stubs instead: {e}"
+    )
+    FRAMEWORK_MODULES_AVAILABLE = False
 
     class PlanningBase:
         def __init__(self, llm=None):
