@@ -131,6 +131,17 @@ def test_workflow_filters_injected_reference_reviews():
     assert agent.last_diagnostics["skipped_injection_reviews"] == 1
 
 
+def test_workflow_runs_with_memory_flag_enabled():
+    llm = FakeLLM(
+        ['{"stars": 4.0, "review": "Memory flag should not break the run."}']
+    )
+    agent = build_agent(llm, use_memory=True, enable_reflection=False)
+
+    result = agent.workflow()
+
+    assert result["stars"] == 4.0
+
+
 def test_workflow_without_context_uses_minimal_prompt():
     llm = FakeLLM(['{"stars": 3.0, "review": "Simple place but fine."}'])
     agent = build_agent(llm, include_context=False)

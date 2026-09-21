@@ -207,11 +207,11 @@ COLAB_ROOT = "/content/drive/MyDrive/society agent"  # adjust to your folder
 !python -m pip install -q -r requirements.txt
 !python -m pip install -q -r requirements-dev.txt
 
-# 3b. The framework (1.0.0a30) pins legacy langchain/openai/
-#     sentence-transformers versions that conflict with what Colab
-#     preinstalls, and it needs lmdb. Install the whole legacy set in one
-#     command so pip resolves it in a single pass:
-!python -m pip install -q "lmdb<2.0,>=1.6.2" "langchain<0.4,>=0.3.13" "langchain-openai<0.3,>=0.2.14" "langchain-chroma<0.2,>=0.1.4" "openai<2.0,>=1.58.1" "sentence-transformers<4.0,>=3.3.1" "transformers>=4.40,<5" "numpy>=2.0,<3"
+# 3b. Colab 2026 ships transformers 5.x / openai 2.x / langchain 1.x, which
+#     break `import websocietysimulator`. Only these packages are needed by
+#     the framework's import chain; chroma-based memory is optional and
+#     would otherwise force numpy<2 on Colab:
+!python -m pip install -q "lmdb<2.0,>=1.6.2" "langchain-openai<0.3,>=0.2.14" "langchain-core<0.4" "openai<2.0,>=1.58.1" "transformers>=4.47,<5"
 !python -c "import websocietysimulator; print('framework OK')"
 
 # 4. Validate offline before spending any API budget
@@ -243,6 +243,9 @@ Notes:
   PyTorch and transformers, and the default CPU runtime can disconnect under
   that load. The environment setup itself is verified on the default runtime
   (107 offline tests plus `--dry-run` pass).
+- Without `langchain`/`langchain-chroma` (step 3b), the agent automatically
+  disables memory and logs a warning; every other feature, including the
+  `use_memory` ablation configs, still runs.
 - `--task-set` accepts `yelp`, `amazon` and `goodreads`; each needs its own
   `tasks/` and `groundtruth/` folders, and a processed data directory with
   `item.json`, `review.json` and `user.json` for that dataset.

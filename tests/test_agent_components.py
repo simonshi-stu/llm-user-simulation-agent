@@ -99,6 +99,19 @@ class TestSafetyChecks:
         assert reference_overlap_ratio("short", ["short"]) == 0.0
 
 
+class TestMemoryFallback:
+    def test_memory_is_disabled_cleanly_when_backend_missing(self):
+        import improved_agent_with_quality as module
+        from fakes import FakeLLM
+
+        agent = ImprovedSimulationAgent(llm=FakeLLM([]), use_memory=True)
+
+        if module.FRAMEWORK_MEMORY_AVAILABLE:
+            assert agent.memory is not None
+        else:
+            assert agent.memory is None
+
+
 class TestDeterministicBaseline:
     def test_average_is_snapped(self):
         reviews = [

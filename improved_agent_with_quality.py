@@ -17,12 +17,13 @@ try:
     from websocietysimulator.llm import LLMBase
     from websocietysimulator.agent.modules.planning_modules import PlanningBase
     from websocietysimulator.agent.modules.reasoning_modules import ReasoningBase
-    from websocietysimulator.agent.modules.memory_modules import MemoryDILU
+    FRAMEWORK_BASE_CLASSES_AVAILABLE = True
     logging.info("Using websocietysimulator base classes.")
 except Exception as e:
     # 如果导入失败（比如本地没有安装 websocietysimulator），
     # 就用本地的简化版基类，这样这个文件仍然可以被 import。
     logging.warning(f"Failed to import websocietysimulator, using local stubs instead: {e}")
+    FRAMEWORK_BASE_CLASSES_AVAILABLE = False
 
     class SimulationAgent:
         def __init__(self, llm):
@@ -43,6 +44,16 @@ except Exception as e:
             self.llm = llm
             self.memory = memory
             self.profile_type_prompt = profile_type_prompt
+
+# MemoryDILU 额外依赖 langchain + langchain-chroma，这两个包在部分环境
+# （例如 2026 版 Colab）与 numpy 2 冲突。单独降级处理：记忆不可用时
+# Agent 仍然用真实框架基类运行，只是关闭记忆功能。
+try:
+    from websocietysimulator.agent.modules.memory_modules import MemoryDILU
+    FRAMEWORK_MEMORY_AVAILABLE = True
+except Exception as e:
+    logging.warning(f"MemoryDILU unavailable, agent memory will be disabled: {e}")
+    FRAMEWORK_MEMORY_AVAILABLE = False
 
     class MemoryDILU:
         def __init__(self, llm=None):
@@ -599,8 +610,14 @@ class ImprovedSimulationAgent(SimulationAgent):
             reflection_decider=draft_needs_reflection
         )
 
-        if self.use_memory:
+        self.memory = None
+        if self.use_memory and FRAMEWORK_MEMORY_AVAILABLE:
             self.memory = MemoryDILU(llm=self.llm)
+        elif self.use_memory:
+            logging.warning(
+                "use_memory=True but MemoryDILU is unavailable; "
+                "running without memory."
+            )
 
         self.profile_analyzer = UserProfileAnalyzer()
         self.quality_analyzer = ReviewQualityAnalyzer()
