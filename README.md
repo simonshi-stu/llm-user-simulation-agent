@@ -187,6 +187,61 @@ simulator framework nor calls the LLM, so it doubles as a no-network smoke
 check. `inspect_agent_output.py` is preserved from the course experiment and
 still assumes the original simulator task layout and an API key.
 
+## Colab Quickstart
+
+The course datasets are large, so Google Colab with the data mounted from
+Google Drive is the recommended way to run full experiments.
+
+```python
+# 1. Mount the Drive folder that holds the course assets
+from google.colab import drive
+drive.mount("/content/drive")
+
+# 2. Inspect the Drive layout and make the clone the working directory
+COLAB_ROOT = "/content/drive/MyDrive/society agent"  # adjust to your folder
+!ls "$COLAB_ROOT"
+!find "$COLAB_ROOT" -maxdepth 3 -type d -name tasks
+%cd $COLAB_ROOT/llm-user-simulation-agent
+
+# 3. Install dependencies (the simulator framework is the heavy part)
+!python -m pip install -q -r requirements.txt
+!python -m pip install -q -r requirements-dev.txt
+
+# 4. Validate offline before spending any API budget
+!python -m pytest -q
+!python comprehensive_evaluation.py --dry-run
+
+# 5. Load the API key from Colab Secrets, never paste it into the notebook
+import os
+from google.colab import userdata
+os.environ["DEEPSEEK_API_KEY"] = userdata.get("DEEPSEEK_API_KEY")
+```
+
+If the assets are not inside the cloned folder, pass absolute Drive paths
+instead of relying on the defaults:
+
+```bash
+python comprehensive_evaluation.py \
+  --data-dir "/content/drive/MyDrive/society agent/Dataset" \
+  --task-dir "/content/drive/MyDrive/society agent/example/track1/yelp/tasks" \
+  --groundtruth-dir "/content/drive/MyDrive/society agent/example/track1/yelp/groundtruth" \
+  --task-set yelp --num-tasks 300 --max-workers 5 --seed 42 \
+  --experiment Full Baseline \
+  --output-dir "/content/drive/MyDrive/society agent/results"
+```
+
+Notes:
+
+- `--task-set` accepts `yelp`, `amazon` and `goodreads`; each needs its own
+  `tasks/` and `groundtruth/` folders.
+- Smoke-test with `--num-tasks 3` before the full 300-task suite.
+- Keep `--max-workers` modest on Colab (5 is a good default) to avoid rate
+  limits and memory pressure.
+- Write `--output-dir` to Drive so results survive runtime resets. The runner
+  saves metadata, per-experiment metrics and per-task JSON after every
+  experiment, so an interrupted session keeps the results already produced;
+  re-running starts a new run (there is no resume flag yet).
+
 ## Current Scope and Honest Limitations
 
 Implemented and unit-tested offline:

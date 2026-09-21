@@ -22,6 +22,8 @@ def test_parser_defaults():
     assert args.max_workers == 5
     assert args.output_dir == "results"
     assert args.seed is None
+    assert args.task_dir is None
+    assert args.groundtruth_dir is None
     assert args.dry_run is False
 
 

@@ -35,7 +35,9 @@ def test_run_id_and_run_dir(tmp_path):
 
 
 def test_build_run_metadata_is_complete(tmp_path):
-    runner = make_runner(tmp_path, seed=7)
+    runner = make_runner(
+        tmp_path, seed=7, task_dir="/data/tasks", groundtruth_dir="/data/gt"
+    )
     configs = [
         ExperimentConfig("A", False, False, 3),
         ExperimentConfig("B", True, True, 5),
@@ -44,6 +46,8 @@ def test_build_run_metadata_is_complete(tmp_path):
     assert metadata["seed"] == 7
     assert metadata["task_set"] == "yelp"
     assert metadata["num_tasks"] == 5
+    assert metadata["task_dir"] == "/data/tasks"
+    assert metadata["groundtruth_dir"] == "/data/gt"
     assert metadata["experiments"] == ["A", "B"]
     assert metadata["run_id"] == runner.run_id
 

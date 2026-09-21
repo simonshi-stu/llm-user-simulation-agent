@@ -274,7 +274,8 @@ class ExperimentRunner:
                  num_tasks: int = 100, max_workers: int = 5,
                  output_dir: str = "results", chat_model: str = "deepseek-chat",
                  base_url: str = "https://api.deepseek.com/v1",
-                 seed: int = None):
+                 seed: int = None, task_dir: str = None,
+                 groundtruth_dir: str = None):
         self.data_dir = data_dir
         self.task_set = task_set
         self.api_key = api_key
@@ -284,6 +285,8 @@ class ExperimentRunner:
         self.chat_model = chat_model
         self.base_url = base_url
         self.seed = seed
+        self.task_dir = task_dir
+        self.groundtruth_dir = groundtruth_dir
         self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.run_dir = os.path.join(output_dir, f"run_{self.run_id}")
         self.results = {}
@@ -310,10 +313,16 @@ class ExperimentRunner:
             cache=True
         )
 
-        # 加载任务
+        # 加载任务（默认约定 example/track1/<task-set>/，可用 CLI 覆盖）
         simulator.set_task_and_groundtruth(
-            task_dir=f"example/track1/{self.task_set}/tasks",
-            groundtruth_dir=f"example/track1/{self.task_set}/groundtruth"
+            task_dir=(
+                self.task_dir
+                or f"example/track1/{self.task_set}/tasks"
+            ),
+            groundtruth_dir=(
+                self.groundtruth_dir
+                or f"example/track1/{self.task_set}/groundtruth"
+            )
         )
 
         # 配置 Agent
@@ -463,6 +472,8 @@ class ExperimentRunner:
             "chat_model": self.chat_model,
             "base_url": self.base_url,
             "seed": self.seed,
+            "task_dir": self.task_dir,
+            "groundtruth_dir": self.groundtruth_dir,
             "output_dir": self.output_dir,
             "experiments": [config.name for config in configs],
         }
@@ -681,6 +692,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Simulator dataset root directory (default: Dataset)."
     )
     parser.add_argument(
+        "--task-dir", default=None,
+        help="Task directory; defaults to example/track1/<task-set>/tasks."
+    )
+    parser.add_argument(
+        "--groundtruth-dir", default=None,
+        help="Groundtruth directory; defaults to "
+             "example/track1/<task-set>/groundtruth."
+    )
+    parser.add_argument(
         "--task-set", default="yelp",
         choices=("yelp", "amazon", "goodreads"),
         help="Task/groundtruth set under example/track1/ (default: yelp)."
@@ -778,7 +798,9 @@ def main(argv=None) -> int:
         output_dir=args.output_dir,
         chat_model=args.chat_model,
         base_url=args.base_url,
-        seed=args.seed
+        seed=args.seed,
+        task_dir=args.task_dir,
+        groundtruth_dir=args.groundtruth_dir
     )
 
     results = runner.run_all_experiments(experiments)
