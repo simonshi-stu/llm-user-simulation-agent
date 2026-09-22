@@ -311,6 +311,7 @@ class ExperimentRunner:
             DeterministicSimulationAgent,
             ImprovedSimulationAgent,
         )
+        from local_memory import LocalMemoryStore
 
         print(f"\n{'='*80}")
         print(f"🧪 运行实验: {config.name}")
@@ -337,6 +338,7 @@ class ExperimentRunner:
         )
 
         # 配置 Agent
+        memory_store = LocalMemoryStore() if config.use_memory else None
         if config.agent_kind == "deterministic":
             agent_class = DeterministicSimulationAgent
         else:
@@ -347,7 +349,8 @@ class ExperimentRunner:
                         enable_reflection=config.enable_reflection,
                         use_memory=config.use_memory,
                         max_reference_reviews=config.max_reference_reviews,
-                        include_context=config.include_context
+                        include_context=config.include_context,
+                        memory_store=memory_store,
                     )
 
             agent_class = ConfiguredAgent

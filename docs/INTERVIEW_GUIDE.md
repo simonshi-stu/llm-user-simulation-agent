@@ -75,7 +75,7 @@ JSON 契约 + Pydantic 校验从根上消灭"自由文本解析"的脆弱性；�
 
 ### Q10 300 任务的结果现在能复现吗？
 不能直接复现：课程任务资产与有效 API key 都不在仓库里。当前能验证的是离线
-链路：107 个测试、dry-run、无 API 的 workflow 端到端。要复现需要恢复数据资产
+链路：118 个测试、dry-run、无 API 的 workflow 端到端。要复现需要恢复数据资产
 并配置新的 key，然后按 README 的命令跑。
 
 ### Q11 如果继续做，下一步是什么？
@@ -94,14 +94,14 @@ bootstrap；③为检索加 embedding 相似度做 A/B；④把条件反思的�
 | 提交数 | 不要提"183 次提交"，那是上游历史；个人贡献是 Agent、评测、Notebook、结果 |
 | 历史结果 | Yelp/Amazon/Goodreads 各 300 任务（RMSE 0.968/1.024/0.892），来自旧课程代码，本仓库未复现 |
 | 耗时 | 历史约 162 秒/300 任务，旧环境记录 |
-| 当前验证 | 107 个离线测试通过、ruff 无告警、CI 已配置（未观察远端运行） |
+| 当前验证 | 118 个离线测试通过、ruff 无告警、CI 已配置（未观察远端运行） |
 | 消融名称 | 当前代码是 `Deterministic / Baseline / No_Context / Full / No_Reflection / No_Memory / Fewer_References`；历史 JSON 的 calibration 字段与当前代码不符，不要引用 |
 
 ## 5. 可现场演示
 
 ```bash
 .\.venv\Scripts\ruff.exe check .          # 秒级
-.\.venv\Scripts\python.exe -m pytest -q   # ~1.5s，107 passed
+.\.venv\Scripts\python.exe -m pytest -q   # ~2.3s，118 passed
 .\.venv\Scripts\python.exe comprehensive_evaluation.py --dry-run
 ```
 

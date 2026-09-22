@@ -56,12 +56,15 @@ Task
   - `ReviewQualityAnalyzer`
   - `ReasoningWithQualityAwareness` (conditional reflection)
   - `ImprovedSimulationAgent` (JSON output contract, hybrid retrieval,
-    injection/leakage checks, no-context mode)
+    injection/leakage checks, no-context mode, optional local memory)
   - `AgentOutput` (Pydantic validation), `normalize_stars`
   - `DeterministicBaseline` / `DeterministicSimulationAgent`
+- `local_memory.py`
+  - bounded, in-process, user-scoped memory for within-run ablations
 - `comprehensive_evaluation.py`
   - experiment configuration and CLI (`--dry-run`, `--seed`, `--experiment`)
   - simulator execution and LLM usage tracking
+  - fresh local memory store per memory-enabled experiment configuration
   - RMSE, MAE, accuracy, distribution and correlation metrics
   - per-task records, paired bootstrap tests, run artifacts
   - comparison and ablation report generation
@@ -72,7 +75,7 @@ Task
   - predicted-vs-ground-truth comparison
   - generated review inspection
 - `tests/`
-  - 107 offline tests covering the agent, evaluation and calibration paths
+  - 118 offline tests covering the agent, evaluation, calibration and memory paths
 - `final_project.ipynb`
   - course experiment notebook and execution record
 - `ablation_results_*_clean.json`
@@ -130,7 +133,7 @@ Do not commit `.env` files, API keys, datasets or generated results.
 
 ## Running Tests
 
-The 107 offline tests cover the agent workflow (with fakes), profile
+The 118 offline tests cover the agent workflow (with fakes), profile
 statistics, quality thresholds, hybrid reference ranking, injection and
 leakage checks, conditional reflection, structured output, calibration,
 per-task records and paired bootstrap tests. They require neither the
@@ -242,10 +245,11 @@ Notes:
 - Prefer a GPU or high-RAM runtime: importing the framework loads TensorFlow,
   PyTorch and transformers, and the default CPU runtime can disconnect under
   that load. The environment setup itself is verified on the default runtime
-  (107 offline tests plus `--dry-run` pass).
-- Without `langchain`/`langchain-chroma` (step 3b), the agent automatically
-  disables memory and logs a warning; every other feature, including the
-  `use_memory` ablation configs, still runs.
+  (118 offline tests plus `--dry-run` pass).
+- Without `langchain`/`langchain-chroma` (step 3b), the optional framework
+  `MemoryDILU` backend is disabled and logs a warning. The evaluation runner's
+  `use_memory` configurations still use the dependency-free `LocalMemoryStore`:
+  memory is bounded, scoped by `user_id`, and discarded after each experiment.
 - `--task-set` accepts `yelp`, `amazon` and `goodreads`; each needs its own
   `tasks/` and `groundtruth/` folders, and a processed data directory with
   `item.json`, `review.json` and `user.json` for that dataset.
@@ -261,7 +265,7 @@ Notes:
 
 Implemented and unit-tested offline:
 
-- user profiling, review quality analysis, optional memory, conditional
+- user profiling, review quality analysis, within-run local memory, conditional
   reflection and structured output parsing with label-format fallback;
 - hybrid reference-review ranking (engagement + lexical overlap + length),
   prompt-injection filtering and generated-review leakage checks;
@@ -283,6 +287,8 @@ Honest limitations that remain:
   and were not produced by this cleaned-up code path;
 - per-task latency cannot be measured through the simulator API; only
   per-experiment wall time and aggregate LLM call latency are saved.
+- local memory is intentionally in-process only: it does not persist across
+  experiments or Colab runtime restarts and does not store groundtruth.
 
 See `docs/PROJECT_SCOPE.md` for the ownership inventory, `docs/PROJECT_GUIDE.md`
 for the full architecture and `docs/INTERVIEW_GUIDE.md` for talking points.

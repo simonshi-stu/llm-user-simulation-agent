@@ -12,7 +12,8 @@ framework source into the project history.
 
 | File | What it contains | Ownership status |
 | --- | --- | --- |
-| `improved_agent_with_quality.py` | Main agent and four personal components: planning, user profiling, quality analysis and reflection; optional framework memory is wired into the workflow | Personal implementation |
+| `improved_agent_with_quality.py` | Main agent and four personal components: planning, user profiling, quality analysis and reflection; optional local/framework memory is wired into the workflow | Personal implementation |
+| `local_memory.py` | Dependency-free, bounded, user-scoped memory for within-run ablations | Personal implementation |
 | `comprehensive_evaluation.py` | Experiment runner, metric calculation, result persistence and report helpers | Personal evaluation work |
 | `inspect_agent_output.py` | Interactive task-level output inspection and error display | Personal tooling |
 | `final_project.ipynb` | Course experiment notebook and execution record | Personal experiment artifact |
@@ -42,11 +43,12 @@ discipline, failure handling and reproducibility.
 > Progress: the evaluation CLI, the offline pytest suite, the no-network
 > `--dry-run` smoke check, hybrid reference ranking, structured JSON output,
 > conditional reflection, safety checks, `score_calibration.py`, per-task
-> records with paired bootstrap tests and per-run artifacts are implemented
+> records with paired bootstrap tests, per-run artifacts and within-run local
+> memory are implemented
 > (see `docs/DEVLOG.md` and `docs/PROJECT_GUIDE.md`). Remaining gaps: the
 > calibration and statistics code has not been validated on real task assets
 > in this repo, retrieval is lexical rather than embedding-based, and no live
-> API run has been performed since the extraction.
+> LLM API run has been performed since the extraction.
 
 ### Priority 1: Make the experiment reproducible
 

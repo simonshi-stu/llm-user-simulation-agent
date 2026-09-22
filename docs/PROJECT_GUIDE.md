@@ -17,12 +17,13 @@
 ```text
 llm-user-simulation-agent/
 ├─ improved_agent_with_quality.py   # Agent 主实现：校验、画像、质量、推理、解析、基线
+├─ local_memory.py                   # 单次实验内、按 user_id 隔离的本地 Memory
 ├─ comprehensive_evaluation.py      # 实验运行器 + 指标 + 配对 bootstrap + CLI
 ├─ score_calibration.py             # 评分校准（bias / linear）
 ├─ inspect_agent_output.py          # 单任务人工观察工具（未 CLI 化）
 ├─ final_project.ipynb              # 课程实验 Notebook（历史执行记录，勿改）
 ├─ ablation_results_*_clean.json    # Yelp / Amazon / Goodreads 历史结果快照
-├─ tests/                           # 107 个离线测试（不装框架、不联网）
+├─ tests/                           # 118 个离线测试（不装框架、不联网）
 │  ├─ fakes.py                      # FakeLLM / FakeInteractionTool / make_review
 │  ├─ test_agent_workflow_offline.py# workflow 端到端
 │  ├─ test_agent_offline.py         # 画像、质量阈值、参考选择、解析与归一
@@ -121,10 +122,12 @@ parse_review_result_with_status
 
 **Agent**
 
-- `ImprovedSimulationAgent(llm, enable_reflection, use_memory, max_reference_reviews, include_context)`。
+- `ImprovedSimulationAgent(llm, enable_reflection, use_memory, max_reference_reviews, include_context, memory_store, memory_limit)`。
 - `workflow()`：见第 3 节；结束后写入 `last_diagnostics`
   （`used_parse_fallback`、`skipped_injection_reviews`、`injection_warning`、
   `leakage_warning`、`reflection_stats`）。
+- `memory_store` 只保存本次运行生成的评论，按 `user_id` 隔离；`ExperimentRunner`
+  为每个启用 memory 的实验配置创建新的 store，不写磁盘也不保存 groundtruth。
 - `parse_review_result_with_status(result)`：返回 `(stars, review, used_fallback)`。
 - `parse_review_result(result)`：兼容旧调用，返回 `(stars, review)`。
 
@@ -157,6 +160,7 @@ parse_review_result_with_status
 - `ExperimentRunner(data_dir, task_set, api_key, num_tasks, max_workers, output_dir,
   chat_model, base_url, seed)`：
   - 每次运行创建 `run_<timestamp>` 目录；
+  - 每个 memory-enabled 配置创建一个新的 `LocalMemoryStore`，并共享给该配置的所有任务 Agent；
   - `per_task_records` 内存中保存逐任务记录；
   - `_extract_groundtruths` 兼容三种框架属性名；
   - `_save_run_metadata` / `_save_per_task_records` / `_save_intermediate_results`；
@@ -234,7 +238,7 @@ print(raw, calibrated)
 - 红-绿流程：先写回归测试证明 bug，再修代码（`docs/DEVLOG.md` 有完整记录）。
 - 离线原则：LLM 与交互工具都用 fake；`--dry-run` 走 subprocess 做无网络 smoke。
 - `pytest.ini` 把 basetemp 指到项目内 `.pytest_tmp/`，避免写系统临时目录。
-- CI 在每次 push 跑 lint + 107 个测试 + dry-run。
+- CI 在每次 push 跑 lint + 118 个测试 + dry-run。
 
 ## 8. 已修复的真实 Bug
 
