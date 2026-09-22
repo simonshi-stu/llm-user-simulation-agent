@@ -1,9 +1,15 @@
-"""Offline tests for per-task records and paired bootstrap testing."""
+"""Offline tests for metrics, per-task records and paired bootstrap testing."""
+
+import sys
+import types
 
 import pytest
 
 from comprehensive_evaluation import (
     build_per_task_records,
+    calculate_additional_metrics,
+    ExperimentConfig,
+    ExperimentRunner,
     extract_prediction,
     paired_bootstrap_test,
 )
@@ -14,6 +20,16 @@ def make_record(error):
 
 
 class TestPerTaskRecords:
+    def test_additional_metrics_include_rmse_and_mae(self):
+        metrics = calculate_additional_metrics(
+            [{"stars": 4.0}, {"stars": 2.0}],
+            [{"stars": 3.0}, {"stars": 1.0}],
+        )
+
+        assert metrics["rmse"] == pytest.approx(1.0)
+        assert metrics["mae"] == pytest.approx(1.0)
+        assert metrics["num_valid_predictions"] == 2
+
     def test_extract_prediction_handles_nested_output(self):
         assert extract_prediction({"output": {"stars": 4.0}}) == 4.0
         assert extract_prediction({"stars": 3}) == 3.0
@@ -34,6 +50,55 @@ class TestPerTaskRecords:
         assert records[0]["predicted"] is None
         assert records[0]["error"] is None
         assert records[0]["squared_error"] is None
+
+    def test_framework_evaluation_failure_keeps_project_metrics(
+        self, monkeypatch, tmp_path
+    ):
+        class FailingSimulator:
+            def __init__(self, **_kwargs):
+                self.groundtruth_data = []
+
+            def set_task_and_groundtruth(self, **_kwargs):
+                self.groundtruth_data = [{"stars": 3.0}]
+
+            def set_agent(self, _agent_class):
+                pass
+
+            def set_llm(self, _llm):
+                pass
+
+            def run_simulation(self, **_kwargs):
+                return [{"output": {"stars": 4.0}}]
+
+            def evaluate(self):
+                raise ZeroDivisionError("division by zero")
+
+        fake_framework = types.ModuleType("websocietysimulator")
+        fake_framework.Simulator = FailingSimulator
+        monkeypatch.setitem(sys.modules, "websocietysimulator", fake_framework)
+
+        runner = ExperimentRunner(
+            data_dir="Dataset",
+            task_set="yelp",
+            api_key="test-key",
+            num_tasks=1,
+            max_workers=1,
+            output_dir=str(tmp_path / "results"),
+        )
+        result = runner.run_experiment(
+            ExperimentConfig(
+                name="Deterministic",
+                enable_reflection=False,
+                use_memory=False,
+                max_reference_reviews=0,
+                agent_kind="deterministic",
+            )
+        )
+
+        assert result["rmse"] == pytest.approx(1.0)
+        assert result["mae"] == pytest.approx(1.0)
+        assert "error" not in result
+        assert result["evaluation_warning"] == "division by zero"
 
 
 class TestPairedBootstrap:

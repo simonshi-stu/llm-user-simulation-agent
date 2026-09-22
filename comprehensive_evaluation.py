@@ -192,14 +192,25 @@ def calculate_additional_metrics(outputs: List[Dict], groundtruths: List[Dict]) 
     计算额外的评估指标（补充 simulator.evaluate()）
     """
     records = build_per_task_records(outputs, groundtruths)
-    valid = [record for record in records if record["error"] is not None]
+    valid = [
+        record for record in records
+        if (
+            record["error"] is not None
+            and record["predicted"] is not None
+            and np.isfinite(record["predicted"])
+            and np.isfinite(record["actual"])
+        )
+    ]
     if not valid:
         return {"error": "No valid predictions"}
 
     predicted_stars = np.array([record["predicted"] for record in valid])
     actual_stars = np.array([record["actual"] for record in valid])
+    errors = predicted_stars - actual_stars
 
     metrics = {}
+    metrics["rmse"] = float(np.sqrt(np.mean(np.square(errors))))
+    metrics["mae"] = float(np.mean(np.abs(errors)))
     metrics["accuracy_exact"] = np.mean(predicted_stars == actual_stars)
     metrics["accuracy_±0.5"] = np.mean(np.abs(predicted_stars - actual_stars) <= 0.5)
     metrics["accuracy_±1.0"] = np.mean(np.abs(predicted_stars - actual_stars) <= 1.0)
@@ -371,41 +382,73 @@ class ExperimentRunner:
         print(f"✅ 完成！用时: {elapsed_time:.2f}秒")
         print(f"   平均每任务: {elapsed_time/self.num_tasks:.2f}秒")
 
+        # Calculate project-owned metrics before calling the framework evaluator.
+        # The framework may truncate or mutate its output list during evaluation.
+        try:
+            additional_metrics = calculate_additional_metrics(
+                outputs, groundtruths
+            )
+        except Exception as e:
+            additional_metrics = {"metric_error": str(e)}
+            print(f"⚠️ 无法计算自有指标: {e}")
+
         # 评估
         print("\n📊 评估中...")
+        eval_results = {}
+        evaluation_warning = None
         try:
-            eval_results = simulator.evaluate()
+            framework_result = simulator.evaluate()
 
-            if groundtruths:
-                try:
-                    additional_metrics = calculate_additional_metrics(
-                        outputs, groundtruths
+            # websocietysimulator==1.0.0a30 returns (metrics, error_log),
+            # while other versions may return the metrics dictionary directly.
+            if isinstance(framework_result, tuple):
+                eval_results, framework_error_log = framework_result
+                if not isinstance(eval_results, dict):
+                    raise TypeError(
+                        "simulator.evaluate() tuple must start with a dict"
                     )
-                    eval_results.update(additional_metrics)
-                except Exception as e:
-                    print(f"⚠️ 无法计算额外指标: {e}")
+                if framework_error_log:
+                    eval_results["framework_error_log"] = framework_error_log
+            else:
+                eval_results = framework_result
 
-            # 添加元数据
-            eval_results["config"] = {
-                "name": config.name,
-                "enable_reflection": config.enable_reflection,
-                "use_memory": config.use_memory,
-                "max_reference_reviews": config.max_reference_reviews,
-                "include_context": config.include_context,
-                "agent_kind": config.agent_kind
-            }
-            eval_results["num_tasks"] = self.num_tasks
-            eval_results["elapsed_time"] = elapsed_time
-            eval_results["timestamp"] = datetime.now().isoformat()
-            eval_results["llm_usage"] = llm_client.usage_stats()
-
-            return eval_results
+            if not isinstance(eval_results, dict):
+                raise TypeError(
+                    "simulator.evaluate() must return a dict or (dict, error_log)"
+                )
 
         except Exception as e:
-            print(f"❌ 评估失败: {e}")
+            evaluation_warning = str(e)
+            print(f"⚠️ 框架评估失败，保留自有指标: {e}")
             import traceback
             traceback.print_exc()
-            return {"error": str(e)}
+
+        if not isinstance(eval_results, dict):
+            eval_results = {}
+
+        # Project-owned RMSE/MAE remain authoritative even when the framework
+        # evaluator succeeds, because the framework has different metric names
+        # and can fail on all-real or partial task sets.
+        eval_results.update(additional_metrics)
+
+        if evaluation_warning:
+            eval_results["evaluation_warning"] = evaluation_warning
+
+        # 添加元数据
+        eval_results["config"] = {
+            "name": config.name,
+            "enable_reflection": config.enable_reflection,
+            "use_memory": config.use_memory,
+            "max_reference_reviews": config.max_reference_reviews,
+            "include_context": config.include_context,
+            "agent_kind": config.agent_kind
+        }
+        eval_results["num_tasks"] = self.num_tasks
+        eval_results["elapsed_time"] = elapsed_time
+        eval_results["timestamp"] = datetime.now().isoformat()
+        eval_results["llm_usage"] = llm_client.usage_stats()
+
+        return eval_results
 
     def run_all_experiments(self, configs: List[ExperimentConfig]):
         """运行所有实验配置"""
