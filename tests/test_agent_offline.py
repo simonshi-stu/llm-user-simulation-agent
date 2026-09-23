@@ -70,12 +70,33 @@ class TestUserProfileAnalyzer:
         profile = UserProfileAnalyzer.analyze_user_patterns(reviews)
         assert profile["engagement_style"] == "informative"
 
+    def test_cool_tendency_is_profiled(self):
+        profile = UserProfileAnalyzer.analyze_user_patterns(
+            [make_review(4, 100, cool=2.0)]
+        )
+
+        assert profile["cool_tendency"] == "high"
+
     def test_format_contains_profile_fields(self):
         reviews = [make_review(5, 100, useful=2.0)]
         profile = UserProfileAnalyzer.analyze_user_patterns(reviews)
         text = UserProfileAnalyzer.format_user_analysis(profile)
         assert "用户特征分析" in text
         assert "信息价值倾向" in text
+        assert "主要评论语言" in text
+
+    def test_selects_recent_engaging_and_representative_reviews(self):
+        reviews = [
+            make_review(5, 80),
+            make_review(2, 100, useful=10),
+            make_review(4, 120),
+            make_review(3, 90),
+        ]
+        selected = UserProfileAnalyzer.select_representative_reviews(reviews)
+
+        assert len(selected) == 3
+        assert selected[0] is reviews[0]
+        assert any(review.get("useful") == 10 for review in selected)
 
 
 class TestReviewQualityAnalyzer:
@@ -106,6 +127,14 @@ class TestReviewQualityAnalyzer:
         result = ReviewQualityAnalyzer.analyze_review_qualities(reviews)
         assert len(result["useful_reviews"]) == 2
         assert len(result["funny_reviews"]) == 2
+
+    def test_selects_cool_examples(self):
+        result = ReviewQualityAnalyzer.analyze_review_qualities(
+            [{"text": "a" * 60, "stars": 4, "cool": 2}]
+        )
+
+        assert result["has_cool_examples"] is True
+        assert result["cool_reviews"][0]["cool"] == 2
 
 
 class TestReferenceSelection:

@@ -107,3 +107,17 @@ class TestDraftNeedsReflection:
 
     def test_empty_draft_needs_reflection(self):
         assert draft_needs_reflection("") == (True, "empty_draft")
+
+    def test_generic_draft_needs_reflection(self):
+        draft = (
+            '{"stars": 5.0, "review": "Good place and good experience. '
+            'Overall everything was good."}'
+        )
+        assert draft_needs_reflection(draft) == (True, "generic_review")
+
+    def test_rating_text_mismatch_needs_reflection(self):
+        draft = (
+            '{"stars": 5.0, "review": "The service was terrible and the '
+            'food was awful, so I would avoid this place."}'
+        )
+        assert draft_needs_reflection(draft) == (True, "rating_text_mismatch")

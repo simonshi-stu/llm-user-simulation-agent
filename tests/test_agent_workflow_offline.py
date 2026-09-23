@@ -62,6 +62,30 @@ def test_prompt_contains_profile_and_reference_sections():
     assert "参考信息" in prompt
 
 
+def test_prompt_uses_compact_profile_and_grounded_language_instruction():
+    llm = FakeLLM(["stars: 4.0\nreview: Coffee and service were both reliable."])
+    agent = build_agent(llm)
+
+    agent.workflow()
+
+    prompt = llm.calls[0]["messages"][0]["content"]
+    assert prompt.count("用户特征分析：") == 1
+    assert "Use English" in prompt
+    assert "只使用用户资料、目标对象信息和参考信息中明确提供的事实" in prompt
+    assert "不要编造价格" in prompt
+
+
+def test_workflow_records_quality_and_memory_diagnostics():
+    llm = FakeLLM(["stars: 4.0\nreview: Coffee and service were both reliable."])
+    agent = build_agent(llm)
+
+    agent.workflow()
+
+    assert agent.last_diagnostics["memory_recalled_count"] == 0
+    assert agent.last_diagnostics["review_length"] > 0
+    assert "reflection_stats" in agent.last_diagnostics
+
+
 def test_workflow_with_reflection_makes_two_llm_calls():
     llm = FakeLLM(
         [

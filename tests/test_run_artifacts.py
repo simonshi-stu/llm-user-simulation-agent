@@ -36,7 +36,12 @@ def test_run_id_and_run_dir(tmp_path):
 
 def test_build_run_metadata_is_complete(tmp_path):
     runner = make_runner(
-        tmp_path, seed=7, task_dir="/data/tasks", groundtruth_dir="/data/gt"
+        tmp_path,
+        seed=7,
+        task_dir="/data/tasks",
+        groundtruth_dir="/data/gt",
+        json_mode=True,
+        calibration_method="bias",
     )
     configs = [
         ExperimentConfig("A", False, False, 3),
@@ -48,6 +53,8 @@ def test_build_run_metadata_is_complete(tmp_path):
     assert metadata["num_tasks"] == 5
     assert metadata["task_dir"] == "/data/tasks"
     assert metadata["groundtruth_dir"] == "/data/gt"
+    assert metadata["json_mode"] is True
+    assert metadata["calibration_method"] == "bias"
     assert metadata["experiments"] == ["A", "B"]
     assert metadata["run_id"] == runner.run_id
 
@@ -62,6 +69,18 @@ def test_save_per_task_records_writes_into_run_dir(tmp_path):
     assert path.exists()
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved[0]["error"] == 1.0
+
+
+def test_save_per_task_diagnostics_writes_into_run_dir(tmp_path):
+    runner = make_runner(tmp_path)
+    runner._save_per_task_diagnostics(
+        "Full", [{"memory_recalled_count": 2, "review_length": 80}]
+    )
+
+    path = Path(runner.run_dir) / "per_task_diagnostics_Full.json"
+    assert path.exists()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved[0]["memory_recalled_count"] == 2
 
 
 def test_extract_groundtruths_prefers_known_attributes(tmp_path):

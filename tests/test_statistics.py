@@ -8,6 +8,7 @@ import pytest
 from comprehensive_evaluation import (
     build_per_task_records,
     calculate_additional_metrics,
+    calculate_calibrated_metrics,
     ExperimentConfig,
     ExperimentRunner,
     extract_prediction,
@@ -50,6 +51,21 @@ class TestPerTaskRecords:
         assert records[0]["predicted"] is None
         assert records[0]["error"] is None
         assert records[0]["squared_error"] is None
+
+    def test_calibration_reports_held_out_metrics(self):
+        records = build_per_task_records(
+            [{"stars": 3.0}, {"stars": 3.0}, {"stars": 4.0}, {"stars": 4.0}],
+            [{"stars": 4.0}, {"stars": 4.0}, {"stars": 5.0}, {"stars": 5.0}],
+        )
+
+        metrics = calculate_calibrated_metrics(
+            records, method="bias", validation_ratio=0.5, seed=0
+        )
+
+        assert metrics["calibration_method"] == "bias"
+        assert metrics["calibration_train_size"] == 2
+        assert metrics["calibration_validation_size"] == 2
+        assert "calibrated_rmse" in metrics
 
     def test_framework_evaluation_failure_keeps_project_metrics(
         self, monkeypatch, tmp_path

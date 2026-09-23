@@ -62,11 +62,12 @@ Task
 - `local_memory.py`
   - bounded, in-process, user-scoped memory for within-run ablations
 - `comprehensive_evaluation.py`
-  - experiment configuration and CLI (`--dry-run`, `--seed`, `--experiment`)
+  - experiment configuration and CLI (`--dry-run`, `--seed`, `--experiment`,
+    temperature, JSON mode and calibration options)
   - simulator execution and LLM usage tracking
   - fresh local memory store per memory-enabled experiment configuration
   - RMSE, MAE, accuracy, distribution and correlation metrics
-  - per-task records, paired bootstrap tests, run artifacts
+  - per-task records and diagnostics, held-out calibration, paired bootstrap tests
   - comparison and ablation report generation
 - `score_calibration.py`
   - bias and linear score calibrators with a validation split
@@ -75,9 +76,11 @@ Task
   - predicted-vs-ground-truth comparison
   - generated review inspection
 - `tests/`
-  - 118 offline tests covering the agent, evaluation, calibration and memory paths
+  - 130 offline tests covering the agent, evaluation, calibration and memory paths
 - `final_project.ipynb`
   - course experiment notebook and execution record
+- `docs/SYNTHETIC_MEMORY_ABLATION.md`
+  - deterministic and live repeated-user memory validation
 - `ablation_results_*_clean.json`
   - archived Yelp, Amazon and Goodreads experiment snapshots
 
@@ -133,7 +136,7 @@ Do not commit `.env` files, API keys, datasets or generated results.
 
 ## Running Tests
 
-The 118 offline tests cover the agent workflow (with fakes), profile
+The 130 offline tests cover the agent workflow (with fakes), profile
 statistics, quality thresholds, hybrid reference ranking, injection and
 leakage checks, conditional reflection, structured output, calibration,
 per-task records and paired bootstrap tests. They require neither the
@@ -235,8 +238,10 @@ python comprehensive_evaluation.py \
   --data-dir "/content/drive/MyDrive/society agent/Dataset" \
   --task-dir "/content/drive/MyDrive/society agent/example/track1/yelp/tasks" \
   --groundtruth-dir "/content/drive/MyDrive/society agent/example/track1/yelp/groundtruth" \
-  --task-set yelp --num-tasks 300 --max-workers 5 --seed 42 \
-  --experiment Full Baseline \
+  --task-set yelp --num-tasks 30 --max-workers 1 --seed 42 \
+  --experiment Baseline No_Context Full No_Memory \
+  --draft-temperature 0.4 --reflection-temperature 0.2 --json-mode \
+  --calibration-method bias \
   --output-dir "/content/drive/MyDrive/society agent/results"
 ```
 
@@ -245,7 +250,7 @@ Notes:
 - Prefer a GPU or high-RAM runtime: importing the framework loads TensorFlow,
   PyTorch and transformers, and the default CPU runtime can disconnect under
   that load. The environment setup itself is verified on the default runtime
-  (118 offline tests plus `--dry-run` pass).
+  (130 offline tests plus `--dry-run` pass).
 - Without `langchain`/`langchain-chroma` (step 3b), the optional framework
   `MemoryDILU` backend is disabled and logs a warning. The evaluation runner's
   `use_memory` configurations still use the dependency-free `LocalMemoryStore`:
@@ -253,9 +258,12 @@ Notes:
 - `--task-set` accepts `yelp`, `amazon` and `goodreads`; each needs its own
   `tasks/` and `groundtruth/` folders, and a processed data directory with
   `item.json`, `review.json` and `user.json` for that dataset.
-- Smoke-test with `--num-tasks 3` before the full 300-task suite.
-- Keep `--max-workers` modest on Colab (5 is a good default) to avoid rate
-  limits and memory pressure.
+- Run 30-50 paired tasks for each of `yelp`, `amazon` and `goodreads` before
+  spending the budget on a full run.
+- Use `--max-workers 1` when measuring ordered memory effects; parallel tasks
+  can race before an earlier same-user output is stored.
+- Keep `--max-workers` modest on Colab for general runs to avoid rate limits and
+  memory pressure.
 - Write `--output-dir` to Drive so results survive runtime resets. The runner
   saves metadata, per-experiment metrics and per-task JSON after every
   experiment, so an interrupted session keeps the results already produced;
@@ -278,9 +286,9 @@ Implemented and unit-tested offline:
 
 Honest limitations that remain:
 
-- the calibration module and the paired bootstrap have not been validated on
-  real model outputs in this repository because the course task assets and a
-  working API key are absent; only offline tests exist;
+- the calibration module and paired bootstrap still need live validation on
+  the three course task sets; the focused live synthetic run validates memory
+  wiring, not model quality;
 - reference selection is a transparent lexical hybrid, not embedding-based
   semantic retrieval, and no embedding endpoint is wired in;
 - the archived Yelp/Amazon/Goodreads numbers come from the earlier course run

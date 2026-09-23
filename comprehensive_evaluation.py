@@ -19,6 +19,7 @@ import json
 import time
 import numpy as np
 from datetime import datetime
+from threading import Lock
 from typing import Dict, List
 
 # 添加当前目录到路径
@@ -67,12 +68,13 @@ class DeepSeekEmbeddingModel:
 class DeepSeekLLM:
     def __init__(self, api_key: str, base_url: str = "https://api.deepseek.com/v1",
                  chat_model: str = "deepseek-chat", embedding_model: str = "deepseek-embedding",
-                 seed: int = None):
+                 seed: int = None, json_mode: bool = False):
         self.api_key = api_key
         self.base_url = base_url
         self.chat_model = chat_model
         self.embedding_model = embedding_model
         self.seed = seed
+        self.json_mode = json_mode
         self.usage = {"calls": 0, "errors": 0, "latency_seconds": 0.0}
 
     def _build_payload(self, messages, temperature, max_tokens):
@@ -85,6 +87,8 @@ class DeepSeekLLM:
         }
         if self.seed is not None:
             payload["seed"] = self.seed
+        if self.json_mode:
+            payload["response_format"] = {"type": "json_object"}
         return payload
 
     def usage_stats(self) -> Dict:
@@ -230,6 +234,54 @@ def calculate_additional_metrics(outputs: List[Dict], groundtruths: List[Dict]) 
     return metrics
 
 
+def calculate_calibrated_metrics(records: List[Dict], method: str = "none",
+                                 validation_ratio: float = 0.5,
+                                 seed: int = 0) -> Dict:
+    """Fit calibration on one split and report only the held-out split."""
+    if method == "none":
+        return {}
+    if not 0.0 < validation_ratio < 1.0:
+        raise ValueError("validation_ratio must be between 0 and 1")
+
+    valid = [
+        record for record in records
+        if record.get("predicted") is not None
+        and record.get("actual") is not None
+    ]
+    if len(valid) < 2:
+        return {
+            "calibration_method": method,
+            "calibration_warning": "fewer than two valid predictions",
+        }
+
+    from score_calibration import ScoreCalibrator, split_pairs
+
+    predictions = [record["predicted"] for record in valid]
+    actuals = [record["actual"] for record in valid]
+    train, validation = split_pairs(
+        predictions, actuals, validation_ratio=validation_ratio, seed=seed
+    )
+    calibrator = ScoreCalibrator(method=method).fit(*train)
+    calibrated_predictions = calibrator.calibrate_many(validation[0])
+    calibrated_actuals = validation[1]
+    errors = np.array(calibrated_predictions) - np.array(calibrated_actuals)
+
+    return {
+        "calibration_method": method,
+        "calibration_train_size": len(train[0]),
+        "calibration_validation_size": len(calibrated_actuals),
+        "calibrated_rmse": float(np.sqrt(np.mean(np.square(errors)))),
+        "calibrated_mae": float(np.mean(np.abs(errors))),
+        "calibrated_accuracy_±0.5": float(
+            np.mean(np.abs(errors) <= 0.5)
+        ),
+        "calibrated_accuracy_±1.0": float(
+            np.mean(np.abs(errors) <= 1.0)
+        ),
+        "calibration_parameters": calibrator.to_dict(),
+    }
+
+
 def paired_bootstrap_test(records_a: List[Dict], records_b: List[Dict],
                           metric: str = "error", n_boot: int = 5000,
                           seed: int = 0) -> Dict:
@@ -286,7 +338,12 @@ class ExperimentRunner:
                  output_dir: str = "results", chat_model: str = "deepseek-chat",
                  base_url: str = "https://api.deepseek.com/v1",
                  seed: int = None, task_dir: str = None,
-                 groundtruth_dir: str = None):
+                 groundtruth_dir: str = None,
+                 draft_temperature: float = 0.4,
+                 reflection_temperature: float = 0.2,
+                 json_mode: bool = False,
+                 calibration_method: str = "none",
+                 calibration_validation_ratio: float = 0.5):
         self.data_dir = data_dir
         self.task_set = task_set
         self.api_key = api_key
@@ -298,10 +355,16 @@ class ExperimentRunner:
         self.seed = seed
         self.task_dir = task_dir
         self.groundtruth_dir = groundtruth_dir
+        self.draft_temperature = draft_temperature
+        self.reflection_temperature = reflection_temperature
+        self.json_mode = json_mode
+        self.calibration_method = calibration_method
+        self.calibration_validation_ratio = calibration_validation_ratio
         self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.run_dir = os.path.join(output_dir, f"run_{self.run_id}")
         self.results = {}
         self.per_task_records = {}
+        self.per_task_diagnostics = {}
 
     def run_experiment(self, config: ExperimentConfig) -> Dict:
         """运行单个实验配置"""
@@ -339,6 +402,9 @@ class ExperimentRunner:
 
         # 配置 Agent
         memory_store = LocalMemoryStore() if config.use_memory else None
+        diagnostics = []
+        diagnostics_lock = Lock()
+        runner = self
         if config.agent_kind == "deterministic":
             agent_class = DeterministicSimulationAgent
         else:
@@ -351,7 +417,20 @@ class ExperimentRunner:
                         max_reference_reviews=config.max_reference_reviews,
                         include_context=config.include_context,
                         memory_store=memory_store,
+                        draft_temperature=runner.draft_temperature,
+                        reflection_temperature=runner.reflection_temperature,
                     )
+
+                def workflow(self):
+                    output = super().workflow()
+                    diagnostic = {
+                        "user_id": self.task.get("user_id"),
+                        "item_id": self.task.get("item_id"),
+                        **self.last_diagnostics,
+                    }
+                    with diagnostics_lock:
+                        diagnostics.append(diagnostic)
+                    return output
 
             agent_class = ConfiguredAgent
 
@@ -359,7 +438,8 @@ class ExperimentRunner:
             api_key=self.api_key,
             base_url=self.base_url,
             chat_model=self.chat_model,
-            seed=self.seed
+            seed=self.seed,
+            json_mode=self.json_mode,
         )
         simulator.set_agent(agent_class)
         simulator.set_llm(llm_client)
@@ -381,6 +461,8 @@ class ExperimentRunner:
         records = build_per_task_records(outputs, groundtruths)
         self.per_task_records[config.name] = records
         self._save_per_task_records(config.name, records)
+        self.per_task_diagnostics[config.name] = diagnostics
+        self._save_per_task_diagnostics(config.name, diagnostics)
 
         print(f"✅ 完成！用时: {elapsed_time:.2f}秒")
         print(f"   平均每任务: {elapsed_time/self.num_tasks:.2f}秒")
@@ -433,6 +515,15 @@ class ExperimentRunner:
         # evaluator succeeds, because the framework has different metric names
         # and can fail on all-real or partial task sets.
         eval_results.update(additional_metrics)
+
+        eval_results.update(
+            calculate_calibrated_metrics(
+                records,
+                method=self.calibration_method,
+                validation_ratio=self.calibration_validation_ratio,
+                seed=self.seed or 0,
+            )
+        )
 
         if evaluation_warning:
             eval_results["evaluation_warning"] = evaluation_warning
@@ -506,6 +597,18 @@ class ExperimentRunner:
             json.dump(records, f, indent=4, ensure_ascii=False)
         print(f"💾 逐任务结果已保存: {filename} ({len(records)} 条)")
 
+    def _save_per_task_diagnostics(self, config_name: str, diagnostics: List[Dict]):
+        """保存每个 Agent 的输出质量与上下文诊断信息。"""
+        os.makedirs(self.run_dir, exist_ok=True)
+        filename = os.path.join(
+            self.run_dir, f"per_task_diagnostics_{config_name}.json"
+        )
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(diagnostics, f, indent=4, ensure_ascii=False)
+        print(
+            f"💾 逐任务诊断已保存: {filename} ({len(diagnostics)} 条)"
+        )
+
     def build_run_metadata(self, configs: List[ExperimentConfig]) -> Dict:
         """记录运行级元数据，保证实验可追溯"""
         return {
@@ -518,6 +621,11 @@ class ExperimentRunner:
             "chat_model": self.chat_model,
             "base_url": self.base_url,
             "seed": self.seed,
+            "draft_temperature": self.draft_temperature,
+            "reflection_temperature": self.reflection_temperature,
+            "json_mode": self.json_mode,
+            "calibration_method": self.calibration_method,
+            "calibration_validation_ratio": self.calibration_validation_ratio,
             "task_dir": self.task_dir,
             "groundtruth_dir": self.groundtruth_dir,
             "output_dir": self.output_dir,
@@ -794,6 +902,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM API base URL."
     )
     parser.add_argument(
+        "--draft-temperature", type=float, default=0.4,
+        help="Temperature for the first review draft (default: 0.4)."
+    )
+    parser.add_argument(
+        "--reflection-temperature", type=float, default=0.2,
+        help="Temperature for the quality reflection pass (default: 0.2)."
+    )
+    parser.add_argument(
+        "--json-mode", action="store_true",
+        help="Request JSON mode from OpenAI-compatible chat endpoints."
+    )
+    parser.add_argument(
+        "--calibration-method", choices=("none", "bias", "linear"),
+        default="none",
+        help="Leakage-safe held-out score calibration method."
+    )
+    parser.add_argument(
+        "--calibration-validation-ratio", type=float, default=0.5,
+        help="Validation fraction for score calibration (default: 0.5)."
+    )
+    parser.add_argument(
         "--output-dir", default="results",
         help="Directory for reports and JSON results (default: results)."
     )
@@ -818,6 +947,10 @@ def print_dry_run(args, experiments: List[ExperimentConfig],
     print(f"  num_tasks   : {args.num_tasks}")
     print(f"  max_workers : {args.max_workers}")
     print(f"  chat_model  : {args.chat_model}")
+    print(f"  draft_temp  : {args.draft_temperature}")
+    print(f"  reflect_temp: {args.reflection_temperature}")
+    print(f"  json_mode   : {args.json_mode}")
+    print(f"  calibration : {args.calibration_method}")
     print(f"  base_url    : {args.base_url}")
     print(f"  output_dir  : {args.output_dir}")
     print(f"  api_key     : {'configured' if api_key_configured else 'missing'}")
@@ -864,7 +997,12 @@ def main(argv=None) -> int:
         base_url=args.base_url,
         seed=args.seed,
         task_dir=args.task_dir,
-        groundtruth_dir=args.groundtruth_dir
+        groundtruth_dir=args.groundtruth_dir,
+        draft_temperature=args.draft_temperature,
+        reflection_temperature=args.reflection_temperature,
+        json_mode=args.json_mode,
+        calibration_method=args.calibration_method,
+        calibration_validation_ratio=args.calibration_validation_ratio,
     )
 
     results = runner.run_all_experiments(experiments)

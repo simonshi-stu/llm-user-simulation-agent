@@ -47,8 +47,10 @@ discipline, failure handling and reproducibility.
 > memory are implemented
 > (see `docs/DEVLOG.md` and `docs/PROJECT_GUIDE.md`). Remaining gaps: the
 > calibration and statistics code has not been validated on real task assets
-> in this repo, retrieval is lexical rather than embedding-based, and no live
-> LLM API run has been performed since the extraction.
+> in this repo, retrieval is lexical rather than embedding-based, and no full
+> live task-asset evaluation has been performed since the extraction. A
+> focused live synthetic memory check is recorded in
+> `docs/SYNTHETIC_MEMORY_ABLATION.md`.
 
 ### Priority 1: Make the experiment reproducible
 

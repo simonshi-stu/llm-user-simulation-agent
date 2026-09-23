@@ -23,7 +23,7 @@ llm-user-simulation-agent/
 ├─ inspect_agent_output.py          # 单任务人工观察工具（未 CLI 化）
 ├─ final_project.ipynb              # 课程实验 Notebook（历史执行记录，勿改）
 ├─ ablation_results_*_clean.json    # Yelp / Amazon / Goodreads 历史结果快照
-├─ tests/                           # 118 个离线测试（不装框架、不联网）
+├─ tests/                           # 130 个离线测试（不装框架、不联网）
 │  ├─ fakes.py                      # FakeLLM / FakeInteractionTool / make_review
 │  ├─ test_agent_workflow_offline.py# workflow 端到端
 │  ├─ test_agent_offline.py         # 画像、质量阈值、参考选择、解析与归一
@@ -33,11 +33,13 @@ llm-user-simulation-agent/
 │  ├─ test_statistics.py            # 逐任务记录、paired bootstrap
 │  ├─ test_run_artifacts.py         # run 目录、metadata、逐任务持久化
 │  ├─ test_evaluation_config.py     # CLI 默认值、实验列表、dry-run
-│  └─ test_llm_client.py            # seed payload、usage 统计
+│  ├─ test_llm_client.py            # seed/JSON payload、usage 统计
+│  └─ test_synthetic_memory.py      # 重复用户 Memory 消融
 ├─ docs/
 │  ├─ PROJECT_SCOPE.md              # 归属边界与扩展路线图
 │  ├─ DEVLOG.md                     # 逐步开发记录（学习/讲解材料）
 │  ├─ PROJECT_GUIDE.md              # 本文件
+│  ├─ SYNTHETIC_MEMORY_ABLATION.md  # 重复用户 Memory 验证记录
 │  └─ INTERVIEW_GUIDE.md            # 面试问答材料
 ├─ requirements.txt                 # 运行时依赖（框架、numpy、requests、pydantic）
 ├─ requirements-dev.txt             # 离线测试所需（不含框架）
@@ -63,15 +65,15 @@ get_reviews(user) → UserProfileAnalyzer      build_minimal_prompt
 extract_query_terms(business_info)
 get_relevant_reviews（混合排序）
 looks_like_prompt_injection 过滤参考评论
-ReviewQualityAnalyzer（useful/funny 示例）
+ReviewQualityAnalyzer（useful/funny/cool 示例）
 MemoryDILU（可选）
 build_prompt
         │
         ▼
 ReasoningWithQualityAwareness
-  ① draft（temperature 0.7，要求 JSON）
+  ① draft（默认 temperature 0.4，要求 JSON）
   ② draft_needs_reflection(draft)?
-       ok → 直接返回初稿；否则 reflection（temperature 0.3）
+       ok → 直接返回初稿；否则 reflection（默认 temperature 0.2）
         │
         ▼
 parse_review_result_with_status
@@ -172,7 +174,8 @@ parse_review_result_with_status
 - `default_experiments()`：`Deterministic`、`Baseline`、`No_Context`、`Full`、
   `No_Reflection`、`No_Memory`、`Fewer_References`。
 - `build_parser()`：`--data-dir/--task-set/--num-tasks/--max-workers/--seed/
-  --api-key/--chat-model/--base-url/--output-dir/--experiment/--dry-run`。
+  --api-key/--chat-model/--base-url/--output-dir/--experiment/--dry-run`，以及
+  temperature、JSON mode 和 held-out calibration 参数。
 - `main(argv=None)`：返回退出码；dry-run 不导入框架、不调 API、不建目录。
 
 ### 4.3 score_calibration.py（T8）
@@ -238,7 +241,7 @@ print(raw, calibrated)
 - 红-绿流程：先写回归测试证明 bug，再修代码（`docs/DEVLOG.md` 有完整记录）。
 - 离线原则：LLM 与交互工具都用 fake；`--dry-run` 走 subprocess 做无网络 smoke。
 - `pytest.ini` 把 basetemp 指到项目内 `.pytest_tmp/`，避免写系统临时目录。
-- CI 在每次 push 跑 lint + 118 个测试 + dry-run。
+- CI 在每次 push 跑 lint + 130 个测试 + dry-run。
 
 ## 8. 已修复的真实 Bug
 

@@ -30,6 +30,13 @@ def test_payload_omits_seed_by_default():
     assert "seed" not in payload
 
 
+def test_payload_can_request_json_mode():
+    llm = DeepSeekLLM(api_key="k", json_mode=True)
+    payload = llm._build_payload([], 0.4, 100)
+
+    assert payload["response_format"] == {"type": "json_object"}
+
+
 def test_usage_stats_track_successful_calls(monkeypatch):
     llm = DeepSeekLLM(api_key="k")
 

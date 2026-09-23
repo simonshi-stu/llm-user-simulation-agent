@@ -74,9 +74,11 @@ JSON 契约 + Pydantic 校验从根上消灭"自由文本解析"的脆弱性；�
 代码路径的数据；当前仓库没有重新测量。
 
 ### Q10 300 任务的结果现在能复现吗？
-不能直接复现：课程任务资产与有效 API key 都不在仓库里。当前能验证的是离线
-链路：118 个测试、dry-run、无 API 的 workflow 端到端。要复现需要恢复数据资产
-并配置新的 key，然后按 README 的命令跑。
+完整 300 任务不能只靠仓库直接复现：课程任务资产与有效 API key 不在仓库里。
+另外已经在 Colab 用真实 DeepSeek 做了四任务 synthetic memory 检查：`Full`
+命中 memory 2/4 次，`No_Memory` 命中 0/4 次；这证明 wiring，不代表质量提升。
+离线链路仍是 130 个测试、dry-run、无 API 的 workflow 端到端。详情见
+`docs/SYNTHETIC_MEMORY_ABLATION.md`。
 
 ### Q11 如果继续做，下一步是什么？
 ①恢复数据 + key，跑通 300 任务并记录逐任务结果；②在真实输出上验证校准与
@@ -94,14 +96,14 @@ bootstrap；③为检索加 embedding 相似度做 A/B；④把条件反思的�
 | 提交数 | 不要提"183 次提交"，那是上游历史；个人贡献是 Agent、评测、Notebook、结果 |
 | 历史结果 | Yelp/Amazon/Goodreads 各 300 任务（RMSE 0.968/1.024/0.892），来自旧课程代码，本仓库未复现 |
 | 耗时 | 历史约 162 秒/300 任务，旧环境记录 |
-| 当前验证 | 118 个离线测试通过、ruff 无告警、CI 已配置（未观察远端运行） |
+| 当前验证 | 130 个离线测试通过、ruff 无告警、三套 task-set dry-run 通过；另有 4-task 真实 DeepSeek memory smoke run |
 | 消融名称 | 当前代码是 `Deterministic / Baseline / No_Context / Full / No_Reflection / No_Memory / Fewer_References`；历史 JSON 的 calibration 字段与当前代码不符，不要引用 |
 
 ## 5. 可现场演示
 
 ```bash
 .\.venv\Scripts\ruff.exe check .          # 秒级
-.\.venv\Scripts\python.exe -m pytest -q   # ~2.3s，118 passed
+.\.venv\Scripts\python.exe -m pytest -q   # 130 passed
 .\.venv\Scripts\python.exe comprehensive_evaluation.py --dry-run
 ```
 
