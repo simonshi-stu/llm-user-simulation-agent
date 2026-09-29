@@ -401,7 +401,15 @@ class ExperimentRunner:
         )
 
         # 配置 Agent
+        # LocalMemoryStore is the guaranteed, dependency-free memory backend.
+        # One store is shared by all agents in this configuration so a later
+        # task for the same user can recall earlier generated reviews.
         memory_store = LocalMemoryStore() if config.use_memory else None
+        if config.use_memory:
+            print(
+                "🧠 Memory enabled: LocalMemoryStore "
+                "(user-scoped, run-local, max 8 entries/user)"
+            )
         diagnostics = []
         diagnostics_lock = Lock()
         runner = self
@@ -533,10 +541,34 @@ class ExperimentRunner:
             "name": config.name,
             "enable_reflection": config.enable_reflection,
             "use_memory": config.use_memory,
+            "memory_backend": (
+                "LocalMemoryStore" if config.use_memory else "disabled"
+            ),
             "max_reference_reviews": config.max_reference_reviews,
             "include_context": config.include_context,
             "agent_kind": config.agent_kind
         }
+        if config.use_memory:
+            eval_results["memory"] = {
+                "enabled": True,
+                "backend": "LocalMemoryStore",
+                "scope": "user_id",
+                "persistence": "experiment-run only",
+                "max_entries_per_user": memory_store.max_entries_per_user,
+                "tasks_with_recall": sum(
+                    item.get("memory_recalled_count", 0) > 0
+                    for item in diagnostics
+                ),
+                "tasks_with_write": sum(
+                    bool(item.get("memory_stored"))
+                    for item in diagnostics
+                ),
+            }
+        else:
+            eval_results["memory"] = {
+                "enabled": False,
+                "backend": "disabled",
+            }
         eval_results["num_tasks"] = self.num_tasks
         eval_results["elapsed_time"] = elapsed_time
         eval_results["timestamp"] = datetime.now().isoformat()
@@ -630,6 +662,14 @@ class ExperimentRunner:
             "groundtruth_dir": self.groundtruth_dir,
             "output_dir": self.output_dir,
             "experiments": [config.name for config in configs],
+            "memory": {
+                "backend": "LocalMemoryStore",
+                "scope": "user_id",
+                "persistence": "experiment-run only",
+                "enabled_configs": [
+                    config.name for config in configs if config.use_memory
+                ],
+            },
         }
 
     def _save_run_metadata(self, configs: List[ExperimentConfig]):

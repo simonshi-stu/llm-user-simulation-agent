@@ -82,6 +82,7 @@ def test_workflow_records_quality_and_memory_diagnostics():
     agent.workflow()
 
     assert agent.last_diagnostics["memory_recalled_count"] == 0
+    assert agent.last_diagnostics["memory_enabled"] is False
     assert agent.last_diagnostics["review_length"] > 0
     assert "reflection_stats" in agent.last_diagnostics
 
@@ -164,6 +165,8 @@ def test_workflow_runs_with_memory_flag_enabled():
     result = agent.workflow()
 
     assert result["stars"] == 4.0
+    assert agent.last_diagnostics["memory_enabled"] is True
+    assert agent.last_diagnostics["memory_stored"] is True
 
 
 def test_workflow_without_context_uses_minimal_prompt():

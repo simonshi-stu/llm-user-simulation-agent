@@ -252,9 +252,11 @@ Notes:
   that load. The environment setup itself is verified on the default runtime
   (130 offline tests plus `--dry-run` pass).
 - Without `langchain`/`langchain-chroma` (step 3b), the optional framework
-  `MemoryDILU` backend is disabled and logs a warning. The evaluation runner's
-  `use_memory` configurations still use the dependency-free `LocalMemoryStore`:
-  memory is bounded, scoped by `user_id`, and discarded after each experiment.
+  `MemoryDILU` enhancement is skipped; this does **not** disable memory. The
+  evaluation runner's `use_memory` configurations always use the dependency-free
+  `LocalMemoryStore`: it recalls the same user's newest generated reviews before
+  generation, writes the new review afterward, is bounded and user-scoped, and is
+  discarded after each experiment.
 - `--task-set` accepts `yelp`, `amazon` and `goodreads`; each needs its own
   `tasks/` and `groundtruth/` folders, and a processed data directory with
   `item.json`, `review.json` and `user.json` for that dataset.

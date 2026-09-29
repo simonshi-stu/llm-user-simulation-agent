@@ -63,13 +63,17 @@ except Exception as e:
             self.profile_type_prompt = profile_type_prompt
 
 # MemoryDILU 额外依赖 langchain + langchain-chroma，这两个包在部分环境
-# （例如 2026 版 Colab）与 numpy 2 冲突。单独降级处理：记忆不可用时
-# Agent 仍然用真实框架基类运行，只是关闭记忆功能。
+# （例如 2026 版 Colab）与 numpy 2 冲突。它只是可选的框架增强；真正用于
+# 跨任务记忆的是下面的 dependency-free LocalMemoryStore，因此缺少该依赖
+# 不能关闭 Agent 的记忆能力。
 try:
     from websocietysimulator.agent.modules.memory_modules import MemoryDILU
     FRAMEWORK_MEMORY_AVAILABLE = True
 except Exception as e:
-    logging.warning(f"MemoryDILU unavailable, agent memory will be disabled: {e}")
+    logging.info(
+        "Optional MemoryDILU unavailable; LocalMemoryStore remains active: %s",
+        e,
+    )
     FRAMEWORK_MEMORY_AVAILABLE = False
 
     class MemoryDILU:
@@ -780,7 +784,16 @@ class ImprovedSimulationAgent(SimulationAgent):
         self.use_memory = use_memory
         self.max_reference_reviews = max_reference_reviews
         self.include_context = include_context
-        self.memory_store = memory_store
+        # LocalMemoryStore is the guaranteed memory backend. The runner passes
+        # one shared store to every agent in an experiment so memories survive
+        # agent instances and remain scoped by user_id. Creating a store here
+        # also makes a standalone agent memory-capable instead of silently
+        # degrading when the optional framework backend is unavailable.
+        self.memory_store = (
+            memory_store if use_memory else None
+        )
+        if self.use_memory and self.memory_store is None:
+            self.memory_store = LocalMemoryStore()
         self.memory_limit = memory_limit
 
         self.planning = EnhancedPlanning(llm=self.llm)
@@ -792,18 +805,33 @@ class ImprovedSimulationAgent(SimulationAgent):
             reflection_temperature=reflection_temperature,
         )
 
+        # ``memory`` is kept as the optional framework-compatible object for
+        # callers that inspect it. It is not the source of truth for memory;
+        # ``memory_store`` above is always used when use_memory=True.
         self.memory = None
         if self.use_memory and FRAMEWORK_MEMORY_AVAILABLE:
-            self.memory = MemoryDILU(llm=self.llm)
-        elif self.use_memory:
-            logging.warning(
-                "use_memory=True but MemoryDILU is unavailable; "
-                "running without memory."
-            )
+            try:
+                self.memory = MemoryDILU(llm=self.llm)
+            except Exception as exc:
+                logging.warning(
+                    "Optional MemoryDILU initialization failed; "
+                    "LocalMemoryStore remains active: %s",
+                    exc,
+                )
+
+        if not self.use_memory:
+            self.memory_backend = "disabled"
+        elif self.memory is None:
+            self.memory_backend = "LocalMemoryStore"
+        else:
+            self.memory_backend = "LocalMemoryStore+MemoryDILU"
 
         self.profile_analyzer = UserProfileAnalyzer()
         self.quality_analyzer = ReviewQualityAnalyzer()
         self.last_diagnostics = {}
+        self._last_memory_recalled_count = 0
+        self._last_memory_stored = False
+        self._last_memory_sequence = None
 
     @staticmethod
     def parse_review_result_with_status(result: str):
@@ -1122,6 +1150,8 @@ class ImprovedSimulationAgent(SimulationAgent):
         try:
             self.last_diagnostics = {}
             self._last_memory_recalled_count = 0
+            self._last_memory_stored = False
+            self._last_memory_sequence = None
             plan = self.planning(task_description=self.task)
             logging.info(f"执行计划已生成：{len(plan)}个步骤")
 
@@ -1189,28 +1219,34 @@ class ImprovedSimulationAgent(SimulationAgent):
             if leakage_warning:
                 logging.warning("生成评论与参考评论重合度过高，可能存在复制")
 
-            self.last_diagnostics = {
-                "used_parse_fallback": used_fallback,
-                "skipped_injection_reviews": skipped_injections,
-                "injection_warning": injection_warning,
-                "leakage_warning": leakage_warning,
-                "memory_recalled_count": self._last_memory_recalled_count,
-                "review_length": len(review_text),
-                "reflection_stats": dict(self.reasoning.stats),
-            }
-
-            logging.info(f"评论生成完成：{stars}星，长度{len(review_text)}字符")
-
             if self.use_memory and self.memory_store:
                 try:
-                    self.memory_store.remember(
+                    entry = self.memory_store.remember(
                         self.task.get('user_id'),
                         review_text,
                         stars=stars,
                         item_id=self.task.get('item_id'),
                     )
+                    self._last_memory_stored = True
+                    self._last_memory_sequence = entry.sequence
                 except ValueError:
                     logging.warning("无法保存本次实验内的用户记忆")
+
+            self.last_diagnostics = {
+                "used_parse_fallback": used_fallback,
+                "skipped_injection_reviews": skipped_injections,
+                "injection_warning": injection_warning,
+                "leakage_warning": leakage_warning,
+                "memory_enabled": bool(self.use_memory and self.memory_store),
+                "memory_backend": self.memory_backend,
+                "memory_recalled_count": self._last_memory_recalled_count,
+                "memory_stored": self._last_memory_stored,
+                "memory_sequence": self._last_memory_sequence,
+                "review_length": len(review_text),
+                "reflection_stats": dict(self.reasoning.stats),
+            }
+
+            logging.info(f"评论生成完成：{stars}星，长度{len(review_text)}字符")
 
             # 只返回stars和review（符合Track 1要求）
             return {

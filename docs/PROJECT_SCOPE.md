@@ -12,7 +12,7 @@ framework source into the project history.
 
 | File | What it contains | Ownership status |
 | --- | --- | --- |
-| `improved_agent_with_quality.py` | Main agent and four personal components: planning, user profiling, quality analysis and reflection; optional local/framework memory is wired into the workflow | Personal implementation |
+| `improved_agent_with_quality.py` | Main agent and four personal components: planning, user profiling, quality analysis and reflection; dependency-free local memory is wired into the workflow, with optional framework enhancement | Personal implementation |
 | `local_memory.py` | Dependency-free, bounded, user-scoped memory for within-run ablations | Personal implementation |
 | `comprehensive_evaluation.py` | Experiment runner, metric calculation, result persistence and report helpers | Personal evaluation work |
 | `inspect_agent_output.py` | Interactive task-level output inspection and error display | Personal tooling |

@@ -37,8 +37,9 @@ this run. The full cell output remains in the Colab notebook referenced from
 the project README.
 
 The optional framework `MemoryDILU` backend was unavailable because
-`langchain_chroma` was not installed. This did not disable the tested path:
-the dependency-free `LocalMemoryStore` handled the read/write behavior.
+`langchain_chroma` was not installed. This did not disable memory: the
+dependency-free `LocalMemoryStore` remained the primary backend and handled
+the read/write behavior.
 
 ## Interpretation
 

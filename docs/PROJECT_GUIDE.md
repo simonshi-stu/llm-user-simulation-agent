@@ -66,7 +66,8 @@ extract_query_terms(business_info)
 get_relevant_reviews（混合排序）
 looks_like_prompt_injection 过滤参考评论
 ReviewQualityAnalyzer（useful/funny/cool 示例）
-MemoryDILU（可选）
+LocalMemoryStore（主 memory；按 user_id 召回/写入）
+MemoryDILU（可选框架增强）
 build_prompt
         │
         ▼
@@ -127,9 +128,13 @@ parse_review_result_with_status
 - `ImprovedSimulationAgent(llm, enable_reflection, use_memory, max_reference_reviews, include_context, memory_store, memory_limit)`。
 - `workflow()`：见第 3 节；结束后写入 `last_diagnostics`
   （`used_parse_fallback`、`skipped_injection_reviews`、`injection_warning`、
-  `leakage_warning`、`reflection_stats`）。
+  `leakage_warning`、`memory_enabled`、`memory_backend`、
+  `memory_recalled_count`、`memory_stored`、`reflection_stats`）。
+- `LocalMemoryStore` 是保证可用的主 memory 后端：在生成前按 `user_id` 召回该用户
+  最近生成的评论，生成后写回新评论；它不依赖 `langchain_chroma`。
 - `memory_store` 只保存本次运行生成的评论，按 `user_id` 隔离；`ExperimentRunner`
   为每个启用 memory 的实验配置创建新的 store，不写磁盘也不保存 groundtruth。
+- `MemoryDILU` 只能作为可选框架增强；缺少它时不会关闭 `LocalMemoryStore`。
 - `parse_review_result_with_status(result)`：返回 `(stars, review, used_fallback)`。
 - `parse_review_result(result)`：兼容旧调用，返回 `(stars, review)`。
 

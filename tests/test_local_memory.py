@@ -136,7 +136,7 @@ def test_runner_gives_one_store_to_agents_in_an_experiment(
         max_workers=1,
         output_dir=str(tmp_path / "results"),
     )
-    runner.run_experiment(
+    result = runner.run_experiment(
         ExperimentConfig(
             name="Local_Memory",
             enable_reflection=False,
@@ -149,3 +149,7 @@ def test_runner_gives_one_store_to_agents_in_an_experiment(
     second_prompt = created_llms[0].calls[1][0]["content"]
     assert "本次实验内该用户此前生成的评论" in second_prompt
     assert "Generated in this run." in second_prompt
+    assert result["memory"]["enabled"] is True
+    assert result["memory"]["backend"] == "LocalMemoryStore"
+    assert result["memory"]["tasks_with_recall"] == 1
+    assert result["memory"]["tasks_with_write"] == 2

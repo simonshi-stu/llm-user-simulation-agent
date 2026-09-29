@@ -100,15 +100,15 @@ class TestSafetyChecks:
 
 
 class TestMemoryFallback:
-    def test_memory_is_disabled_cleanly_when_backend_missing(self):
+    def test_local_memory_remains_active_when_framework_backend_missing(self):
         import improved_agent_with_quality as module
         from fakes import FakeLLM
 
         agent = ImprovedSimulationAgent(llm=FakeLLM([]), use_memory=True)
 
-        if module.FRAMEWORK_MEMORY_AVAILABLE:
-            assert agent.memory is not None
-        else:
+        assert agent.memory_store is not None
+        assert agent.memory_backend.startswith("LocalMemoryStore")
+        if not module.FRAMEWORK_MEMORY_AVAILABLE:
             assert agent.memory is None
 
 
