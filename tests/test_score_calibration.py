@@ -4,6 +4,7 @@ import pytest
 
 from score_calibration import (
     ScoreCalibrator,
+    evaluate_temporal_calibration,
     rmse,
     split_pairs,
 )
@@ -91,3 +92,43 @@ class TestSplitAndRmse:
         calibrated_rmse = rmse(calibrator.calibrate_many(validation[0]), validation[1])
 
         assert calibrated_rmse < raw_rmse
+
+    def test_temporal_calibration_fits_validation_and_keeps_test_untouched(self):
+        records = [
+            {"index": 0, "predicted": 2.0, "actual": 4.0},
+            {"index": 1, "predicted": 3.0, "actual": 5.0},
+            {"index": 2, "predicted": 3.0, "actual": 4.0},
+            {"index": 3, "predicted": 4.0, "actual": 5.0},
+            {"index": 4, "predicted": 2.0, "actual": 1.0},
+        ]
+        splits = {
+            0: "train", 1: "train", 2: "validation", 3: "validation", 4: "test"
+        }
+
+        result = evaluate_temporal_calibration(records, splits, method="bias")
+
+        assert result["train_rows_not_used_for_calibration"] == 2
+        assert result["validation_rows_used_to_fit_calibrator"] == 2
+        assert result["test_rows_used_only_for_final_evaluation"] == 1
+        assert result["calibration_parameters"]["bias"] == 1.0
+
+        changed_test_label = [dict(record) for record in records]
+        changed_test_label[-1]["actual"] = 5.0
+        changed = evaluate_temporal_calibration(
+            changed_test_label, splits, method="bias"
+        )
+        assert changed["calibration_parameters"] == result["calibration_parameters"]
+        assert changed["calibrated_test"] != result["calibrated_test"]
+
+    def test_temporal_calibration_requires_validation_and_test(self):
+        records = [
+            {"index": 0, "predicted": 3.0, "actual": 4.0},
+            {"index": 1, "predicted": 3.0, "actual": 4.0},
+            {"index": 2, "predicted": 4.0, "actual": 5.0},
+        ]
+        with pytest.raises(ValueError, match="test row"):
+            evaluate_temporal_calibration(
+                records,
+                {0: "train", 1: "validation", 2: "validation"},
+                method="bias",
+            )

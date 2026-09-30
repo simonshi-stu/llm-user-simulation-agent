@@ -155,6 +155,40 @@ class TestPairedBootstrap:
                 [{"error": 1.0}], [{"error": 1.0}], metric="missing"
             )
 
+    def test_task_indexes_must_match_before_pairing(self):
+        with pytest.raises(ValueError, match="task indexes"):
+            paired_bootstrap_test(
+                [{"index": 1, "error": 0.0}],
+                [{"index": 2, "error": 1.0}],
+            )
+
+    def test_both_record_sets_must_carry_task_indexes(self):
+        with pytest.raises(ValueError, match="both paired records"):
+            paired_bootstrap_test(
+                [{"index": 0, "error": 0.0}],
+                [{"error": 1.0}],
+            )
+
+    def test_cluster_bootstrap_reports_user_resampling_unit(self):
+        full = [
+            {"index": 0, "error": 0.2},
+            {"index": 1, "error": 0.3},
+            {"index": 2, "error": 0.1},
+        ]
+        no_memory = [
+            {"index": 0, "error": 1.0},
+            {"index": 1, "error": 1.0},
+            {"index": 2, "error": 1.0},
+        ]
+
+        result = paired_bootstrap_test(
+            full, no_memory, n_boot=300, seed=3,
+            cluster_ids=["u1", "u1", "u2"],
+        )
+
+        assert result["resampling_unit"] == "cluster"
+        assert result["n_clusters"] == 2
+
 
 class TestResultsAnalyzer:
     def test_statistical_analysis_handles_empty_results(self):

@@ -20,6 +20,8 @@ class MemoryEntry:
     stars: Optional[float] = None
     item_id: Optional[str] = None
     sequence: int = 0
+    origin_task_index: Optional[int] = None
+    origin_execution_order: Optional[int] = None
 
 
 class LocalMemoryStore:
@@ -40,6 +42,8 @@ class LocalMemoryStore:
         *,
         stars: Optional[float] = None,
         item_id: Optional[str] = None,
+        origin_task_index: Optional[int] = None,
+        origin_execution_order: Optional[int] = None,
     ) -> MemoryEntry:
         """Append one generated review and return the stored entry."""
         key = self._validate_user_id(user_id)
@@ -54,6 +58,8 @@ class LocalMemoryStore:
                 stars=stars,
                 item_id=item_id,
                 sequence=self._sequence,
+                origin_task_index=origin_task_index,
+                origin_execution_order=origin_execution_order,
             )
             entries = self._entries.setdefault(key, [])
             entries.append(entry)
@@ -68,6 +74,24 @@ class LocalMemoryStore:
 
         with self._lock:
             return list(reversed(self._entries.get(key, [])[-limit:]))
+
+    def count(self, user_id: str) -> int:
+        """Return the number of stored candidates without exposing their text."""
+        key = self._validate_user_id(user_id)
+        with self._lock:
+            return len(self._entries.get(key, []))
+
+    def recall_snapshot(
+        self, user_id: str, limit: int = 5,
+    ) -> tuple[int, list[MemoryEntry]]:
+        """Atomically return candidate count and the selected newest entries."""
+        key = self._validate_user_id(user_id)
+        with self._lock:
+            entries = self._entries.get(key, [])
+            candidates = len(entries)
+            if limit <= 0:
+                return candidates, []
+            return candidates, list(reversed(entries[-limit:]))
 
     def clear(self) -> None:
         """Remove all entries from this experiment-local store."""

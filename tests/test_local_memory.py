@@ -55,6 +55,11 @@ def test_memory_is_shared_by_agents_within_a_run():
     prompt = second_llm.calls[0]["messages"][0]["content"]
     assert "本次实验内该用户此前生成的评论" in prompt
     assert "First generated review." in prompt
+    assert second.last_diagnostics["memory_candidate_count"] == 1
+    assert second.last_diagnostics["memory_recalled_count"] == 1
+    assert second.last_diagnostics["memory_prompt_entry_count"] == 1
+    assert second.last_diagnostics["memory_recalled_sequences"] == [1]
+    assert second.last_diagnostics["memory_prompt_sequences"] == [1]
 
 
 def test_memory_disabled_does_not_read_or_write():
@@ -101,7 +106,8 @@ def test_runner_gives_one_store_to_agents_in_an_experiment(
         def set_llm(self, llm):
             self.llm = llm
 
-        def run_simulation(self, **_kwargs):
+        def run_simulation(self, **kwargs):
+            assert kwargs["max_workers"] == 1
             outputs = []
             for item_id in ("i1", "i2"):
                 agent = self.agent_class(llm=self.llm)
@@ -152,4 +158,19 @@ def test_runner_gives_one_store_to_agents_in_an_experiment(
     assert result["memory"]["enabled"] is True
     assert result["memory"]["backend"] == "LocalMemoryStore"
     assert result["memory"]["tasks_with_recall"] == 1
+    assert result["memory"]["tasks_with_candidates"] == 1
     assert result["memory"]["tasks_with_write"] == 2
+    assert result["memory"]["tasks_with_prompt_memory"] == 1
+    diagnostics = runner.per_task_diagnostics["Local_Memory"]
+    assert [row["execution_order"] for row in diagnostics] == [0, 1]
+    assert [row["memory_candidate_count"] for row in diagnostics] == [0, 1]
+    assert [row["memory_prompt_entry_count"] for row in diagnostics] == [0, 1]
+    assert [row["memory_recalled_sequences"] for row in diagnostics] == [[], [1]]
+    assert [row["memory_recalled_origin_orders"] for row in diagnostics] == [
+        [], [0]
+    ]
+    assert [row["user_repeat_stratum"] for row in diagnostics] == [
+        "first_seen", "repeat"
+    ]
+    assert diagnostics[0]["user_group"] == diagnostics[1]["user_group"]
+    assert all("user_id" not in row and "item_id" not in row for row in diagnostics)

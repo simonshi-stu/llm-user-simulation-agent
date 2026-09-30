@@ -167,6 +167,10 @@ def test_workflow_runs_with_memory_flag_enabled():
     assert result["stars"] == 4.0
     assert agent.last_diagnostics["memory_enabled"] is True
     assert agent.last_diagnostics["memory_stored"] is True
+    assert agent.last_diagnostics["memory_candidate_count"] == 0
+    assert agent.last_diagnostics["memory_recalled_count"] == 0
+    assert agent.last_diagnostics["memory_prompt_entry_count"] == 0
+    assert len(agent.last_diagnostics["prompt_sha256"]) == 64
 
 
 def test_workflow_without_context_uses_minimal_prompt():

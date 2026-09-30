@@ -123,3 +123,69 @@ def rmse(predictions, actuals) -> float:
         (float(p) - float(a)) ** 2 for p, a in zip(predictions, actuals)
     )
     return (total / len(predictions)) ** 0.5
+
+
+def evaluate_temporal_calibration(records, split_by_index, method="bias"):
+    """Fit on the declared validation/calibration split; evaluate test once.
+
+    The train split is reserved for model/prompt choices. The calibration method
+    must be selected before calling this helper; it is fitted only on the
+    validation split and the test labels are used only for final reporting.
+    """
+    if method not in ScoreCalibrator.VALID_METHODS:
+        raise ValueError(f"unknown calibration method: {method}")
+    if not isinstance(split_by_index, dict):
+        raise ValueError("split_by_index must map task indexes to split names")
+
+    valid_records = []
+    seen_indexes = set()
+    for position, record in enumerate(records):
+        index = record.get("index", position)
+        try:
+            index = int(index)
+            predicted = float(record["predicted"])
+            actual = float(record["actual"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("records need numeric index, predicted, actual") from exc
+        if index in seen_indexes:
+            raise ValueError("task indexes must be unique")
+        seen_indexes.add(index)
+        if index not in split_by_index:
+            raise ValueError(f"task index {index} has no declared split")
+        valid_records.append((index, predicted, actual, split_by_index[index]))
+
+    calibration = [row for row in valid_records if row[3] == "validation"]
+    test = [row for row in valid_records if row[3] == "test"]
+    train_count = sum(row[3] == "train" for row in valid_records)
+    if len(calibration) < 2:
+        raise ValueError("at least two validation rows are required to calibrate")
+    if not test:
+        raise ValueError("at least one untouched test row is required")
+
+    calibrator = ScoreCalibrator(method=method).fit(
+        [row[1] for row in calibration],
+        [row[2] for row in calibration],
+    )
+    raw_predictions = [row[1] for row in test]
+    actuals = [row[2] for row in test]
+    calibrated_predictions = calibrator.calibrate_many(raw_predictions)
+
+    def summarize(predictions):
+        errors = [float(prediction) - actual for prediction, actual in zip(
+            predictions, actuals
+        )]
+        return {
+            "rmse": rmse(predictions, actuals),
+            "mae": sum(abs(error) for error in errors) / len(errors),
+            "mean_signed_bias": sum(errors) / len(errors),
+        }
+
+    return {
+        "calibration_method": method,
+        "train_rows_not_used_for_calibration": train_count,
+        "validation_rows_used_to_fit_calibrator": len(calibration),
+        "test_rows_used_only_for_final_evaluation": len(test),
+        "raw_test": summarize(raw_predictions),
+        "calibrated_test": summarize(calibrated_predictions),
+        "calibration_parameters": calibrator.to_dict(),
+    }

@@ -13,9 +13,12 @@ comprehensive_evaluation.py
 """
 
 import argparse
+import hashlib
+import hmac
 import sys
 import os
 import json
+import secrets
 import time
 import numpy as np
 from datetime import datetime
@@ -284,7 +287,8 @@ def calculate_calibrated_metrics(records: List[Dict], method: str = "none",
 
 def paired_bootstrap_test(records_a: List[Dict], records_b: List[Dict],
                           metric: str = "error", n_boot: int = 5000,
-                          seed: int = 0) -> Dict:
+                          seed: int = 0,
+                          cluster_ids: List[str] = None) -> Dict:
     """Paired bootstrap test over per-task records.
 
     The two record lists must share the same task ordering and length.
@@ -295,6 +299,24 @@ def paired_bootstrap_test(records_a: List[Dict], records_b: List[Dict],
         raise ValueError("record lists must have the same length")
     if not records_a:
         raise ValueError("record lists must not be empty")
+    if cluster_ids is not None and len(cluster_ids) != len(records_a):
+        raise ValueError("cluster_ids must match the record-list length")
+    if cluster_ids is not None and any(
+        cluster is None or not str(cluster).strip() for cluster in cluster_ids
+    ):
+        raise ValueError("cluster_ids must identify every paired task")
+    for a, b in zip(records_a, records_b):
+        if ("index" in a) != ("index" in b):
+            raise ValueError("both paired records must carry task indexes")
+        if "index" in a and "index" in b and a["index"] != b["index"]:
+            raise ValueError("paired records must have matching task indexes")
+        if ("task_fingerprint" in a) != ("task_fingerprint" in b):
+            raise ValueError("both paired records must carry task fingerprints")
+        if (
+            "task_fingerprint" in a and "task_fingerprint" in b
+            and a["task_fingerprint"] != b["task_fingerprint"]
+        ):
+            raise ValueError("paired records must have matching task fingerprints")
 
     try:
         diffs = np.array([
@@ -306,8 +328,28 @@ def paired_bootstrap_test(records_a: List[Dict], records_b: List[Dict],
 
     rng = np.random.default_rng(seed)
     n = len(diffs)
-    samples = rng.choice(diffs, size=(n_boot, n), replace=True)
-    boot_means = samples.mean(axis=1)
+    if cluster_ids is None:
+        samples = rng.choice(diffs, size=(n_boot, n), replace=True)
+        boot_means = samples.mean(axis=1)
+        resampling_unit = "task"
+        cluster_count = None
+    else:
+        grouped = {}
+        for cluster, diff in zip(cluster_ids, diffs):
+            grouped.setdefault(str(cluster), []).append(float(diff))
+        clusters = list(grouped.values())
+        if not clusters:
+            raise ValueError("cluster_ids must contain at least one cluster")
+        boot_means = np.empty(n_boot, dtype=float)
+        for index in range(n_boot):
+            sampled_clusters = rng.integers(0, len(clusters), size=len(clusters))
+            selected = [
+                error for cluster_index in sampled_clusters
+                for error in clusters[int(cluster_index)]
+            ]
+            boot_means[index] = np.mean(selected)
+        resampling_unit = "cluster"
+        cluster_count = len(clusters)
     observed = float(diffs.mean())
 
     lower, upper = np.percentile(boot_means, [2.5, 97.5])
@@ -323,6 +365,8 @@ def paired_bootstrap_test(records_a: List[Dict], records_b: List[Dict],
         "ci95_high": float(upper),
         "p_value": p_value,
         "n_boot": n_boot,
+        "resampling_unit": resampling_unit,
+        "n_clusters": cluster_count,
     }
 
 
@@ -365,6 +409,9 @@ class ExperimentRunner:
         self.results = {}
         self.per_task_records = {}
         self.per_task_diagnostics = {}
+        # Ephemeral, run-local key: diagnostics can be joined across ablations
+        # without persisting raw user/item identifiers or the key itself.
+        self._diagnostic_hmac_key = secrets.token_bytes(32)
 
     def run_experiment(self, config: ExperimentConfig) -> Dict:
         """运行单个实验配置"""
@@ -412,6 +459,7 @@ class ExperimentRunner:
             )
         diagnostics = []
         diagnostics_lock = Lock()
+        execution_state = {"next": 0, "seen_user_groups": set()}
         runner = self
         if config.agent_kind == "deterministic":
             agent_class = DeterministicSimulationAgent
@@ -430,14 +478,59 @@ class ExperimentRunner:
                     )
 
                 def workflow(self):
+                    task = getattr(self, "task", {}) or {}
+                    user_id = str(task.get("user_id", "") or "")
+                    item_id = str(task.get("item_id", "") or "")
+                    source_index = None
+                    for index_field in ("task_index", "task_idx", "index", "idx"):
+                        candidate = task.get(index_field)
+                        try:
+                            if candidate is not None:
+                                source_index = int(candidate)
+                                break
+                        except (TypeError, ValueError):
+                            continue
+                    with diagnostics_lock:
+                        execution_order = execution_state["next"]
+                        execution_state["next"] += 1
+                        user_group = hmac.new(
+                            runner._diagnostic_hmac_key,
+                            user_id.encode("utf-8"),
+                            hashlib.sha256,
+                        ).hexdigest()[:16] if user_id else None
+                        is_repeat = (
+                            user_group in execution_state["seen_user_groups"]
+                            if user_group else False
+                        )
+                        if user_group:
+                            execution_state["seen_user_groups"].add(user_group)
+                        task_payload = "\0".join((
+                            user_id, item_id,
+                            str(source_index) if source_index is not None else "",
+                        ))
+                        task_fingerprint = hmac.new(
+                            runner._diagnostic_hmac_key,
+                            task_payload.encode("utf-8"),
+                            hashlib.sha256,
+                        ).hexdigest()[:20]
+                        diagnostics.append(None)
+
+                    self._audit_task_index = source_index
+                    self._audit_execution_order = execution_order
+
                     output = super().workflow()
                     diagnostic = {
-                        "user_id": self.task.get("user_id"),
-                        "item_id": self.task.get("item_id"),
+                        "task_index": source_index,
+                        "execution_order": execution_order,
+                        "task_fingerprint": task_fingerprint,
+                        "user_group": user_group,
+                        "user_repeat_stratum": (
+                            "repeat" if is_repeat else "first_seen"
+                        ),
                         **self.last_diagnostics,
                     }
                     with diagnostics_lock:
-                        diagnostics.append(diagnostic)
+                        diagnostics[execution_order] = diagnostic
                     return output
 
             agent_class = ConfiguredAgent
@@ -524,6 +617,19 @@ class ExperimentRunner:
         # and can fail on all-real or partial task sets.
         eval_results.update(additional_metrics)
 
+        try:
+            from memory_audit import rating_diagnostics
+
+            eval_results["rating_diagnostics"] = rating_diagnostics(
+                records,
+                seed=self.seed or 0,
+            )
+            eval_results["rating_diagnostics_user_strata"] = (
+                "not_joined_without_verified_task_index_mapping"
+            )
+        except Exception as exc:
+            eval_results["rating_diagnostics_warning"] = type(exc).__name__
+
         eval_results.update(
             calculate_calibrated_metrics(
                 records,
@@ -559,15 +665,29 @@ class ExperimentRunner:
                     item.get("memory_recalled_count", 0) > 0
                     for item in diagnostics
                 ),
+                "tasks_with_candidates": sum(
+                    item.get("memory_candidate_count", 0) > 0
+                    for item in diagnostics
+                ),
                 "tasks_with_write": sum(
                     bool(item.get("memory_stored"))
                     for item in diagnostics
+                    if item
+                ),
+                "tasks_with_prompt_memory": sum(
+                    item.get("memory_prompt_entry_count", 0) > 0
+                    for item in diagnostics
+                    if item
                 ),
             }
         else:
             eval_results["memory"] = {
                 "enabled": False,
                 "backend": "disabled",
+                "tasks_with_candidates": 0,
+                "tasks_with_recall": 0,
+                "tasks_with_prompt_memory": 0,
+                "tasks_with_write": 0,
             }
         eval_results["num_tasks"] = self.num_tasks
         eval_results["elapsed_time"] = elapsed_time
@@ -662,6 +782,12 @@ class ExperimentRunner:
             "groundtruth_dir": self.groundtruth_dir,
             "output_dir": self.output_dir,
             "experiments": [config.name for config in configs],
+            "diagnostics_schema_version": 2,
+            "prompt_logging": "sha256 only; prompt text is not persisted",
+            "task_ordering": (
+                "execution_order records workflow start order; source task index "
+                "is recorded only if supplied by the simulator task"
+            ),
             "memory": {
                 "backend": "LocalMemoryStore",
                 "scope": "user_id",
@@ -682,7 +808,8 @@ class ExperimentRunner:
             )
         print(f"💾 运行元数据已保存: {filename}")
 
-    def compare(self, name_a: str, name_b: str, metric: str = "error") -> Dict:
+    def compare(self, name_a: str, name_b: str, metric: str = "error",
+                cluster_ids: List[str] = None) -> Dict:
         """对两个配置做配对 bootstrap 检验（需要同一批任务顺序）"""
         if (
             name_a not in self.per_task_records
@@ -694,6 +821,7 @@ class ExperimentRunner:
             self.per_task_records[name_b],
             metric=metric,
             seed=self.seed or 0,
+            cluster_ids=cluster_ids,
         )
 
 

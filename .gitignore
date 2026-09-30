@@ -18,6 +18,12 @@ results/
 all_results_*.json
 experiment_report.md
 evaluation_results_*.json
+per_task_*.json
+per_task_diagnostics_*.json
+temporal_manifest*.json
+memory_audit*.json
+prompt_trace*.json
+prompt_trace*.jsonl
 
 # Local editor and OS files.
 .vscode/

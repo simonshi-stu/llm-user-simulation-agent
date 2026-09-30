@@ -15,6 +15,7 @@ framework source into the project history.
 | `improved_agent_with_quality.py` | Main agent and four personal components: planning, user profiling, quality analysis and reflection; dependency-free local memory is wired into the workflow, with optional framework enhancement | Personal implementation |
 | `local_memory.py` | Dependency-free, bounded, user-scoped memory for within-run ablations | Personal implementation |
 | `comprehensive_evaluation.py` | Experiment runner, metric calculation, result persistence and report helpers | Personal evaluation work |
+| `memory_audit.py` | No-LLM redacted audit, prompt-trace checks and temporal manifests | Personal evaluation tooling |
 | `inspect_agent_output.py` | Interactive task-level output inspection and error display | Personal tooling |
 | `final_project.ipynb` | Course experiment notebook and execution record | Personal experiment artifact |
 | `ablation_results_yelp_clean.json` | Yelp archived metrics | Personal experiment result |
@@ -42,15 +43,18 @@ discipline, failure handling and reproducibility.
 
 > Progress: the evaluation CLI, the offline pytest suite, the no-network
 > `--dry-run` smoke check, hybrid reference ranking, structured JSON output,
-> conditional reflection, safety checks, `score_calibration.py`, per-task
-> records with paired bootstrap tests, per-run artifacts and within-run local
-> memory are implemented
-> (see `docs/DEVLOG.md` and `docs/PROJECT_GUIDE.md`). Remaining gaps: the
-> calibration and statistics code has not been validated on real task assets
-> in this repo, retrieval is lexical rather than embedding-based, and no full
-> live task-asset evaluation has been performed since the extraction. A
-> focused live synthetic memory check is recorded in
-> `docs/SYNTHETIC_MEMORY_ABLATION.md`.
+> conditional reflection, safety checks, calibration helpers, per-task paired
+> statistics, run-local Memory, privacy-conscious data/prompt audits and a
+> strict temporal-manifest builder are implemented and offline-tested
+> (see `docs/PROJECT_GUIDE.md` and
+> `docs/MEMORY_EVALUATION_AUDIT_2026-09.md`). Remaining gaps: no authorized
+> task/groundtruth/processed-review assets or 2026 per-task artifacts are
+> available in this checkout; temporal fields and Simulator ordering are not
+> verified here; the manifest is not yet wired into the live Simulator adapter;
+> calibration/statistics lack real-task validation; retrieval is lexical, not
+> embedding-based. A focused live synthetic wiring check is recorded in
+> `docs/SYNTHETIC_MEMORY_ABLATION.md`; session-provided 2026 aggregate results
+> are interpreted separately in the audit report and are not local artifacts.
 
 ### Priority 1: Make the experiment reproducible
 
@@ -60,7 +64,8 @@ discipline, failure handling and reproducibility.
   API call or the full course dataset.
 - Add unit tests for profile statistics, quality thresholds, output parsing and
   star-range validation.
-- Save per-task outputs, prompts, latency and errors with a run identifier.
+- Save numeric per-task diagnostics without raw IDs/reviews/prompts; optional
+  prompt traces must be local-only and explicitly privacy-reviewed.
 
 ### Priority 2: Improve the agent itself
 
@@ -78,6 +83,8 @@ discipline, failure handling and reproducibility.
 
 - Preserve per-task errors and use paired bootstrap confidence intervals or a
   paired statistical test instead of a scalar relative-difference helper.
+- Audit candidate/actual/prompt Memory coverage and use a time-safe manifest;
+  treat generated comments as predictions, never as trusted feedback labels.
 - Run every ablation with the same task IDs, seed policy, model settings and
   budget.
 - Report cost, latency, failure rate, parse-repair rate and quality metrics

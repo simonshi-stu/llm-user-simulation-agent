@@ -19,11 +19,12 @@ llm-user-simulation-agent/
 ├─ improved_agent_with_quality.py   # Agent 主实现：校验、画像、质量、推理、解析、基线
 ├─ local_memory.py                   # 单次实验内、按 user_id 隔离的本地 Memory
 ├─ comprehensive_evaluation.py      # 实验运行器 + 指标 + 配对 bootstrap + CLI
+├─ memory_audit.py                    # 无 LLM 数据泄漏/重复率审计 + 时间清单
 ├─ score_calibration.py             # 评分校准（bias / linear）
 ├─ inspect_agent_output.py          # 单任务人工观察工具（未 CLI 化）
 ├─ final_project.ipynb              # 课程实验 Notebook（历史执行记录，勿改）
 ├─ ablation_results_*_clean.json    # Yelp / Amazon / Goodreads 历史结果快照
-├─ tests/                           # 130 个离线测试（不装框架、不联网）
+├─ tests/                           # 150 个离线测试（不装框架、不联网）
 │  ├─ fakes.py                      # FakeLLM / FakeInteractionTool / make_review
 │  ├─ test_agent_workflow_offline.py# workflow 端到端
 │  ├─ test_agent_offline.py         # 画像、质量阈值、参考选择、解析与归一
@@ -34,13 +35,15 @@ llm-user-simulation-agent/
 │  ├─ test_run_artifacts.py         # run 目录、metadata、逐任务持久化
 │  ├─ test_evaluation_config.py     # CLI 默认值、实验列表、dry-run
 │  ├─ test_llm_client.py            # seed/JSON payload、usage 统计
-│  └─ test_synthetic_memory.py      # 重复用户 Memory 消融
+│  ├─ test_synthetic_memory.py      # 重复用户 Memory 消融
+│  └─ test_memory_audit.py          # 隐私审计、prompt 检查、时间安全清单
 ├─ docs/
 │  ├─ PROJECT_SCOPE.md              # 归属边界与扩展路线图
 │  ├─ DEVLOG.md                     # 逐步开发记录（学习/讲解材料）
 │  ├─ PROJECT_GUIDE.md              # 本文件
 │  ├─ SYNTHETIC_MEMORY_ABLATION.md  # 重复用户 Memory 验证记录
-│  └─ INTERVIEW_GUIDE.md            # 面试问答材料
+│  ├─ INTERVIEW_GUIDE.md            # 面试问答材料
+│  └─ MEMORY_EVALUATION_AUDIT_2026-09.md # 数据限制、实测边界与实验协议
 ├─ requirements.txt                 # 运行时依赖（框架、numpy、requests、pydantic）
 ├─ requirements-dev.txt             # 离线测试所需（不含框架）
 ├─ pytest.ini                       # testpaths / pythonpath / basetemp 在项目内
@@ -129,7 +132,8 @@ parse_review_result_with_status
 - `workflow()`：见第 3 节；结束后写入 `last_diagnostics`
   （`used_parse_fallback`、`skipped_injection_reviews`、`injection_warning`、
   `leakage_warning`、`memory_enabled`、`memory_backend`、
-  `memory_recalled_count`、`memory_stored`、`reflection_stats`）。
+  `memory_recalled_count`、`memory_stored`、`reflection_stats`）。诊断还区分
+  Memory 候选、实际召回、来源执行序、实际写入 prompt 的 sequence；prompt 仅保存 SHA-256。
 - `LocalMemoryStore` 是保证可用的主 memory 后端：在生成前按 `user_id` 召回该用户
   最近生成的评论，生成后写回新评论；它不依赖 `langchain_chroma`。
 - `memory_store` 只保存本次运行生成的评论，按 `user_id` 隔离；`ExperimentRunner`
@@ -159,7 +163,11 @@ parse_review_result_with_status
 - `calculate_additional_metrics()`：exact、±0.5、±1.0、均值/方差、Pearson。
 - `paired_bootstrap_test(records_a, records_b, metric="error", n_boot, seed)`：
   配对差值 `mean(a)-mean(b)`、95% 百分位 CI、双侧 p 值
-  （`p = min(1, 2*min(P(boot>=0), P(boot<=0)))`）。
+  （`p = min(1, 2*min(P(boot>=0), P(boot<=0)))`）；记录中有 task index/fingerprint
+  时检查配对，并可显式提供 user cluster 进行 cluster bootstrap。
+- 每配置的 `rating_diagnostics` 按真值星级总结 signed bias、误差、预测分布和
+  bootstrap 区间；runner 不猜测匿名用户组与结果行的映射，需在审计 CLI 显式核验后
+  才提供 repeat 分层或用户 cluster 区间。
 
 **实验运行（T4/T12）**
 
@@ -183,14 +191,31 @@ parse_review_result_with_status
   temperature、JSON mode 和 held-out calibration 参数。
 - `main(argv=None)`：返回退出码；dry-run 不导入框架、不调 API、不建目录。
 
-### 4.3 score_calibration.py（T8）
+### 4.3 memory_audit.py
+
+- `dataset`：汇总全部 tasks/groundtruth 的重复用户机会和候选召回覆盖；可选处理
+  本地 review 文件以及 prompt trace。数组/JSONL 增量解析；仅输出聚合计数，不输出
+  原文、ID、prompt 或输入路径。源数据匹配不等于实际 prompt 暴露。
+- `manifest`：按目标时间严格筛选用户历史/目标物品参考，排除全部可匹配的目标交互
+  和同时间/未来评论，生成共享的时间排序和 train/validation/test 清单。目标源评论
+  无法唯一匹配、没有可信时间或用户/物品 key 的任务会标记不合格。时间字段语义仍需
+  数据拥有者确认。
+- `run`：对 Full/No_Memory 逐任务文件区分候选/召回/prompt 纳入，并分析数值误差；
+  默认不把 source index、执行序和记录位置互相推定。只有核验相同任务 index 或
+  Simulator 输出顺序后才显式开启配对选项。
+- 审计器不调用模型。输出 JSON 仍应存入被忽略的本地 results 目录；输入数据与
+  prompt trace 不应提交。
+
+### 4.4 score_calibration.py（T8）
 
 - `ScoreCalibrator(method="bias"|"linear")`：`fit` / `calibrate` / `calibrate_many` /
   `to_dict` / `from_dict`；输出自动归一 + clamp。
 - `split_pairs(predictions, actuals, validation_ratio, seed)`：确定性切分。
 - `rmse(predictions, actuals)`：便于比较校准前后。
+- `evaluate_temporal_calibration(records, split_by_index, method)`：只在显式
+  validation split 拟合，train 不参与拟合，test 只做最终报告；尚未接入真实 Simulator run。
 
-### 4.4 tests/
+### 4.5 tests/
 
 - `fakes.py` 提供 `FakeLLM`（队列响应、记录调用）与 `FakeInteractionTool`。
 - 全部测试满足两个约束：不 import `websocietysimulator`（缺失时走 stub）、不联网。
@@ -203,6 +228,7 @@ parse_review_result_with_status
 results/run_YYYYmmdd_HHMMSS/
 ├─ metadata.json              # run_id、数据集、任务数、workers、模型、seed、实验列表
 ├─ per_task_<Config>.json     # [{index, predicted, actual, error, squared_error}, ...]
+├─ per_task_diagnostics_<Config>.json # 匿名分组、执行序与 memory/prompt 计数；无原文
 ├─ results_<Config>.json      # 单实验指标 + config + llm_usage
 ├─ experiment_report.md       # 对比表 / 消融 / 最佳配置
 ├─ comparisons.json           # Full vs Deterministic / Baseline 的 bootstrap 结果
@@ -246,7 +272,7 @@ print(raw, calibrated)
 - 红-绿流程：先写回归测试证明 bug，再修代码（`docs/DEVLOG.md` 有完整记录）。
 - 离线原则：LLM 与交互工具都用 fake；`--dry-run` 走 subprocess 做无网络 smoke。
 - `pytest.ini` 把 basetemp 指到项目内 `.pytest_tmp/`，避免写系统临时目录。
-- CI 在每次 push 跑 lint + 130 个测试 + dry-run。
+- CI 在每次 push 跑 lint + 150 个测试 + dry-run。
 
 ## 8. 已修复的真实 Bug
 

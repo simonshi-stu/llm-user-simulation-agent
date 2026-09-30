@@ -69,6 +69,10 @@ Task
   - RMSE, MAE, accuracy, distribution and correlation metrics
   - per-task records and diagnostics, held-out calibration, paired bootstrap tests
   - comparison and ablation report generation
+- `memory_audit.py`
+  - offline repeated-user and review-leakage audit with redacted output
+  - strict temporal split manifest and optional prompt-trace inspection
+  - per-task Memory candidate/recall/prompt-inclusion analysis
 - `score_calibration.py`
   - bias and linear score calibrators with a validation split
 - `inspect_agent_output.py`
@@ -76,7 +80,7 @@ Task
   - predicted-vs-ground-truth comparison
   - generated review inspection
 - `tests/`
-  - 130 offline tests covering the agent, evaluation, calibration and memory paths
+  - 150 offline tests covering the agent, evaluation, calibration and memory audit
 - `final_project.ipynb`
   - course experiment notebook and execution record
 - `docs/SYNTHETIC_MEMORY_ABLATION.md`
@@ -136,7 +140,7 @@ Do not commit `.env` files, API keys, datasets or generated results.
 
 ## Running Tests
 
-The 130 offline tests cover the agent workflow (with fakes), profile
+The 150 offline tests cover the agent workflow (with fakes), profile
 statistics, quality thresholds, hybrid reference ranking, injection and
 leakage checks, conditional reflection, structured output, calibration,
 per-task records and paired bootstrap tests. They require neither the
@@ -250,7 +254,7 @@ Notes:
 - Prefer a GPU or high-RAM runtime: importing the framework loads TensorFlow,
   PyTorch and transformers, and the default CPU runtime can disconnect under
   that load. The environment setup itself is verified on the default runtime
-  (130 offline tests plus `--dry-run` pass).
+  (150 offline tests plus `--dry-run` pass).
 - Without `langchain`/`langchain-chroma` (step 3b), the optional framework
   `MemoryDILU` enhancement is skipped; this does **not** disable memory. The
   evaluation runner's `use_memory` configurations always use the dependency-free
@@ -283,25 +287,69 @@ Implemented and unit-tested offline:
 - `score_calibration.py` with bias and linear calibrators;
 - per-task error records and a paired bootstrap test replacing the old
   relative-difference helper;
+- `memory_audit.py` for redacted repetition/leakage checks, optional exact
+  prompt-trace inspection, time-safe manifests, rating-bias intervals and
+  per-task candidate/recall/prompt-inclusion diagnostics;
 - per-run artifacts (`metadata.json`, per-task JSON, comparisons) and LLM
   usage counters.
 
 Honest limitations that remain:
 
-- the calibration module and paired bootstrap still need live validation on
-  the three course task sets; the focused live synthetic run validates memory
-  wiring, not model quality;
+- calibration, user-cluster bootstrap and time-safe manifest construction have
+  synthetic/offline tests but still need validation on authorized real task
+  assets; the focused live synthetic run validates memory wiring, not model
+  quality;
+- the course task/groundtruth/processed-review data and the 2026 per-task run
+  artifacts are not in this checkout; source leakage and target-time semantics
+  therefore remain unverified here;
+- session-provided 2026 paired aggregates showed actual Memory recall in 0/400
+  Yelp, 0/400 Amazon and 2/400 Goodreads tasks; those aggregate differences are
+  not evidence that Memory improved accuracy. See the audit report;
 - reference selection is a transparent lexical hybrid, not embedding-based
   semantic retrieval, and no embedding endpoint is wired in;
 - the archived Yelp/Amazon/Goodreads numbers come from the earlier course run
   and were not produced by this cleaned-up code path;
 - per-task latency cannot be measured through the simulator API; only
-  per-experiment wall time and aggregate LLM call latency are saved.
+  per-experiment wall time and aggregate LLM call latency are saved;
 - local memory is intentionally in-process only: it does not persist across
   experiments or Colab runtime restarts and does not store groundtruth.
 
 See `docs/PROJECT_SCOPE.md` for the ownership inventory, `docs/PROJECT_GUIDE.md`
-for the full architecture and `docs/INTERVIEW_GUIDE.md` for talking points.
+for the full architecture, `docs/INTERVIEW_GUIDE.md` for talking points, and
+`docs/MEMORY_EVALUATION_AUDIT_2026-09.md` for the no-API memory audit, data
+limitations and next-step experiment protocol.
+
+## Offline Memory and Leakage Audit
+
+The audit CLI does not import the simulator, call an LLM, or print user IDs,
+item IDs, comments, prompts or input paths. It streams JSON arrays/JSONL and
+retains only task-relevant review metadata in memory. `--prompt-file` accepts
+local prompt traces for exact-text checks; only counts are emitted. Prompt
+traces and datasets remain sensitive local data and must not be committed.
+
+```powershell
+# Repeated-user opportunity and source-corpus leakage evidence
+py memory_audit.py dataset `
+  --task-dir example/track1/goodreads/tasks `
+  --groundtruth-dir example/track1/goodreads/groundtruth `
+  --review-data Dataset/review.json `
+  --output results/goodreads_memory_audit.json
+
+# Time-safe manifest: only strictly earlier, non-target real-review rows
+py memory_audit.py manifest `
+  --task-dir example/track1/goodreads/tasks `
+  --groundtruth-dir example/track1/goodreads/groundtruth `
+  --review-data Dataset/review.json `
+  --train-ratio 0.6 --validation-ratio 0.2 `
+  --output results/temporal_manifest_goodreads.json
+```
+
+The time-field semantics still require dataset-owner verification. If no
+target event time or uniquely matched target review row exists, the strict
+manifest marks that task ineligible rather than inventing chronology. The
+manifest is a tested offline construction artifact;
+it is not yet wired into the live Simulator adapter. See the report for
+privacy-safe run-artifact analysis and its pairing caveats.
 
 ## Attribution
 

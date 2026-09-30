@@ -58,15 +58,16 @@ JSON 契约 + Pydantic 校验从根上消灭"自由文本解析"的脆弱性；�
 验证提升幅度。
 
 ### Q7 统计检验怎么做？为什么不用 t 检验？
-保存每个任务的绝对误差，`paired_bootstrap_test` 对配对差值做 10000 次重采样，
+保存每个任务的绝对误差，`paired_bootstrap_test` 默认对配对差值做 5000 次重采样，
 输出均值差、95% 百分位 CI 和双侧 p 值（`p = min(1, 2*min(P(boot≥0), P(boot≤0)))`）。
 任务样本非正态、方差未知，配对 bootstrap 不依赖正态假设，而且与逐任务记录
 天然兼容。原来的"相对差异"函数已删除。
 
-### Q8 数据泄漏和 prompt 注入怎么防？
+### Q8 prompt 注入和评论复制怎么防？
 参考评论是其他用户对同一商家的评论，模型可能照抄：用字符 8-gram 重合率检查，
 超过 0.5 告警。参考评论与生成结果都会做中英文指令注入短语检测，可疑参考评论
-直接跳过并在 `last_diagnostics.skipped_injection_reviews` 计数。
+直接跳过并在 `last_diagnostics.skipped_injection_reviews` 计数。这不等于时间泄漏
+已经解决；user/item review 工具返回值是否含目标/未来交互仍需数据与 Simulator 证据。
 
 ### Q9 成本与延迟？
 每个任务 1 次 LLM 调用（初稿通过检查）或 2 次（触发反思）。`DeepSeekLLM`
@@ -74,16 +75,20 @@ JSON 契约 + Pydantic 校验从根上消灭"自由文本解析"的脆弱性；�
 代码路径的数据；当前仓库没有重新测量。
 
 ### Q10 300 任务的结果现在能复现吗？
-完整 300 任务不能只靠仓库直接复现：课程任务资产与有效 API key 不在仓库里。
+历史完整 300 任务不能只靠仓库直接复现：课程任务资产与有效 API key 不在仓库里。
 另外已经在 Colab 用真实 DeepSeek 做了四任务 synthetic memory 检查：`Full`
 命中 memory 2/4 次，`No_Memory` 命中 0/4 次；这证明 wiring，不代表质量提升。
-离线链路仍是 130 个测试、dry-run、无 API 的 workflow 端到端。详情见
-`docs/SYNTHETIC_MEMORY_ABLATION.md`。
+用户提供的 2026-09-26 配对结果中，每个数据集有 400 个同索引任务，但实际 Memory
+召回数为 Yelp 0、Amazon 0、Goodreads 2；这些聚合差异不能说明 Memory 改善评分，
+而且逐任务文件当前不可访问。当前离线链路有 150 个测试、dry-run、无 API workflow
+与隐私安全审计。详情见 `docs/SYNTHETIC_MEMORY_ABLATION.md` 和
+`docs/MEMORY_EVALUATION_AUDIT_2026-09.md`。
 
 ### Q11 如果继续做，下一步是什么？
-①恢复数据 + key，跑通 300 任务并记录逐任务结果；②在真实输出上验证校准与
-bootstrap；③为检索加 embedding 相似度做 A/B；④把条件反思的触发策略与
-成本-质量帕累托曲线做出来；⑤用成对任务集重跑全部消融。
+①先恢复获准数据与逐任务产物，核验重复用户、时间字段和实际 prompt 暴露；②用
+共享的时间安全任务清单比较 Full/No_Memory 与可信统计记忆，先做低成本离线复核；
+③在 validation 拟合校准、留 test 只评估一次；④评分准确性与评论风格分别报告；
+⑤任何在线扩样前单独确认 API 预算和模型。
 
 ### Q12 这个项目最大的工程教训？
 不要相信"能跑过"的自由文本解析。多行丢失和银行家舍入两个 bug 都会静默改变
@@ -96,14 +101,14 @@ bootstrap；③为检索加 embedding 相似度做 A/B；④把条件反思的�
 | 提交数 | 不要提"183 次提交"，那是上游历史；个人贡献是 Agent、评测、Notebook、结果 |
 | 历史结果 | Yelp/Amazon/Goodreads 各 300 任务（RMSE 0.968/1.024/0.892），来自旧课程代码，本仓库未复现 |
 | 耗时 | 历史约 162 秒/300 任务，旧环境记录 |
-| 当前验证 | 130 个离线测试通过、ruff 无告警、三套 task-set dry-run 通过；另有 4-task 真实 DeepSeek memory smoke run |
+| 当前验证 | 150 个离线测试通过、ruff 无告警、Goodreads Full/No_Memory dry-run 通过；另有 4-task 真实 DeepSeek memory smoke run |
 | 消融名称 | 当前代码是 `Deterministic / Baseline / No_Context / Full / No_Reflection / No_Memory / Fewer_References`；历史 JSON 的 calibration 字段与当前代码不符，不要引用 |
 
 ## 5. 可现场演示
 
 ```bash
 .\.venv\Scripts\ruff.exe check .          # 秒级
-.\.venv\Scripts\python.exe -m pytest -q   # 130 passed
+.\.venv\Scripts\python.exe -m pytest -q   # 150 passed
 .\.venv\Scripts\python.exe comprehensive_evaluation.py --dry-run
 ```
 
@@ -118,3 +123,6 @@ FakeInteractionTool 完整跑通 `workflow()`，并断言 `last_diagnostics`。
    改为逐任务记录 + 配对 bootstrap，并保留 CI 与 p 值。
 3. **可复现性**：没有框架/数据/key 时无法验证 → CLI 化、懒加载、fakes、
    dry-run、CI，让核心路径在没有外部依赖时也能验证。
+4. **Memory 评测定位**：写入次数看似证明 Memory 起作用 → 按候选/实际召回/prompt
+   纳入逐层拆解，发现 2026 配对评测中 Yelp/Amazon 零召回、Goodreads 仅两次 →
+   补充脱敏诊断、时间清单和无泄漏合成测试；真实效果仍待逐任务产物核验。
