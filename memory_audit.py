@@ -3,7 +3,8 @@
 
 The CLI prints aggregate counts and numeric diagnostics only. It never prints
 task/user/item identifiers, review text, or prompts. Generated manifests contain
-source row indexes and hashes, not source records or raw identifiers.
+source row indexes and hashes, not source records or raw identifiers; a manifest
+alone is not an approved runtime context or proof of timestamp semantics.
 """
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ import hashlib
 import json
 import math
 import re
+import struct
 import sys
+from bisect import bisect_left
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,11 +33,21 @@ DATE_FIELDS = (
 )
 TEXT_FIELDS = ("review_text", "text", "content", "review")
 STAR_FIELDS = ("stars", "rating", "score")
+TEMPORAL_MAX_REVIEW_SOURCE_BYTES = 64 * 1024 * 1024
+TEMPORAL_MAX_REVIEW_ROWS = 100_000
 ROOT_ROW_FIELDS = frozenset(
     (*USER_FIELDS, *ITEM_FIELDS, *REVIEW_ID_FIELDS, *DATE_FIELDS,
      *TEXT_FIELDS, "stars", "rating", "score", "type", "task_index",
      "task_idx", "index", "prompt", "prompt_text", "messages")
 )
+
+
+class TemporalManifestInputError(ValueError):
+    """Safe, categorized failure for temporal source loading."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
 
 
 class _JSONStream:
@@ -240,6 +253,20 @@ def _files(path: str | Path) -> list[Path]:
     )
 
 
+def iter_review_records(paths: Iterable[str | Path]) -> Iterator[tuple[int, dict]]:
+    """Yield raw local review rows with stable source indexes.
+
+    Indexes are provenance only; callers must reconstruct and enforce the
+    temporal eligibility rules instead of treating a manifest as context data.
+    """
+    row_index = 0
+    for value in paths:
+        for path in _files(value):
+            for record in iter_records(path):
+                yield row_index, record
+                row_index += 1
+
+
 def _read_directory_records(path: str | Path) -> tuple[list[dict], int]:
     paths = _files(path)
     records: list[dict] = []
@@ -367,6 +394,7 @@ def _load_task_pairs(
         "task_files": len(task_files),
         "groundtruth_files": len(truth_files),
         "alignment": "natural_filename_order",
+        "record_alignment": "single_record_per_file",
         "warnings": [],
     }
     if not task_files or not truth_files:
@@ -387,7 +415,68 @@ def _load_task_pairs(
         if len(task_rows) != len(truth_rows):
             diagnostics["warnings"].append("paired_file_record_count_mismatch")
             return [], diagnostics
-        pairs.extend(zip(task_rows, truth_rows))
+        if len(task_rows) == 1:
+            task_index = _as_id(
+                _field(task_rows[0], ("task_index", "task_idx", "index", "idx"))
+            )
+            truth_index = _as_id(
+                _field(truth_rows[0], ("task_index", "task_idx", "index", "idx"))
+            )
+            if (
+                task_index is not None and truth_index is not None
+                and task_index != truth_index
+            ):
+                diagnostics["warnings"].append(
+                    "single_record_task_index_mismatch"
+                )
+                return [], diagnostics
+            pairs.append((task_rows[0], truth_rows[0]))
+            continue
+
+        # Never infer task/label pairing from list position inside multi-record
+        # files. Require a unique, explicit source task index on both sides.
+        task_indexes = [
+            _as_id(_field(row, ("task_index", "task_idx", "index", "idx")))
+            for row in task_rows
+        ]
+        truth_indexes = [
+            _as_id(_field(row, ("task_index", "task_idx", "index", "idx")))
+            for row in truth_rows
+        ]
+        if (
+            any(index is None for index in (*task_indexes, *truth_indexes))
+            or len(set(task_indexes)) != len(task_indexes)
+            or len(set(truth_indexes)) != len(truth_indexes)
+            or set(task_indexes) != set(truth_indexes)
+        ):
+            diagnostics["warnings"].append(
+                "multi_record_pairing_requires_matching_unique_task_indexes"
+            )
+            return [], diagnostics
+        truth_by_index = dict(zip(truth_indexes, truth_rows))
+        pairs.extend(
+            (task_row, truth_by_index[source_index])
+            for task_row, source_index in zip(task_rows, task_indexes)
+        )
+        diagnostics["record_alignment"] = "explicit_task_index"
+
+    for task_row, truth_row in pairs:
+        task_info = _extract_task(task_row, 0)
+        truth_info = _extract_task(truth_row, 0)
+        for field_name in (
+            "user_id", "item_id", "target_review_id", "timestamp",
+            "target_text_digest",
+        ):
+            task_value = task_info.get(field_name)
+            truth_value = truth_info.get(field_name)
+            if (
+                task_value is not None and truth_value is not None
+                and task_value != truth_value
+            ):
+                diagnostics["warnings"].append(
+                    "paired_task_groundtruth_identity_mismatch"
+                )
+                return [], diagnostics
     diagnostics["task_count"] = len(pairs)
     return pairs, diagnostics
 
@@ -415,7 +504,248 @@ def _review_row(record: dict[str, Any], row_index: int) -> dict[str, Any]:
         "timestamp": timestamp,
         "text_digest": text_digest,
         "stars": stars,
+        "useful": _field(record, ("useful",)),
+        "funny": _field(record, ("funny",)),
+        "cool": _field(record, ("cool",)),
     }
+
+
+def _temporal_source_files(paths: Iterable[str | Path]) -> list[Path]:
+    return [path for value in paths for path in _files(value)]
+
+
+def _preflight_temporal_review_sources(paths: list[Path]) -> int:
+    """Bound both on-disk and decoded input before parsing review records."""
+    total_bytes = 0
+    decoded_bytes = 0
+    for path in paths:
+        try:
+            source_size = path.stat().st_size
+            total_bytes += source_size
+        except OSError as exc:
+            raise TemporalManifestInputError("review_source_unavailable") from exc
+        if total_bytes > TEMPORAL_MAX_REVIEW_SOURCE_BYTES:
+            raise TemporalManifestInputError("review_source_byte_limit_exceeded")
+        if path.name.casefold().endswith(".gz"):
+            try:
+                with gzip.open(path, "rb") as handle:
+                    while chunk := handle.read(64 * 1024):
+                        decoded_bytes += len(chunk)
+                        if decoded_bytes > TEMPORAL_MAX_REVIEW_SOURCE_BYTES:
+                            raise TemporalManifestInputError(
+                                "review_source_decoded_byte_limit_exceeded"
+                            )
+            except (OSError, EOFError) as exc:
+                raise TemporalManifestInputError("review_source_parse_failed") from exc
+        else:
+            decoded_bytes += source_size
+            if decoded_bytes > TEMPORAL_MAX_REVIEW_SOURCE_BYTES:
+                raise TemporalManifestInputError(
+                    "review_source_decoded_byte_limit_exceeded"
+                )
+    return total_bytes
+
+
+def _update_record_fingerprint(digest, record: dict[str, Any]) -> None:
+    payload = json.dumps(
+        record, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    digest.update(struct.pack(">Q", len(payload)))
+    digest.update(payload)
+
+
+def _load_temporal_review_index(
+    paths: Iterable[str | Path],
+    *,
+    relevant_users: set[str],
+    relevant_items: set[str],
+) -> dict[str, Any]:
+    """Stream source rows, retaining metadata only for task-relevant reviews.
+
+    Every parsed record contributes to a canonical source fingerprint and a
+    stable cross-file row index. Original text is discarded after hashing;
+    source bytes and record count are hard-limited for this offline prototype.
+    """
+    source_files = _temporal_source_files(paths)
+    source_bytes = _preflight_temporal_review_sources(source_files)
+    digest = hashlib.sha256(b"temporal-review-records-v1\0")
+    rows: list[dict[str, Any]] = []
+    row_index = 0
+
+    for file_index, source in enumerate(source_files):
+        try:
+            before = source.stat()
+        except OSError as exc:
+            raise TemporalManifestInputError("review_source_unavailable") from exc
+        digest.update(b"file\0")
+        digest.update(struct.pack(">Q", file_index))
+        file_rows = 0
+        try:
+            for record in iter_records(source):
+                if row_index >= TEMPORAL_MAX_REVIEW_ROWS:
+                    raise TemporalManifestInputError(
+                        "review_source_record_limit_exceeded"
+                    )
+                _update_record_fingerprint(digest, record)
+                user_id = _as_id(_field(record, USER_FIELDS))
+                item_id = _as_id(_field(record, ITEM_FIELDS))
+                if user_id in relevant_users or item_id in relevant_items:
+                    rows.append(_review_row(record, row_index))
+                row_index += 1
+                file_rows += 1
+        except TemporalManifestInputError:
+            raise
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise TemporalManifestInputError("review_source_parse_failed") from exc
+        try:
+            after = source.stat()
+        except OSError as exc:
+            raise TemporalManifestInputError("review_source_changed_during_read") from exc
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise TemporalManifestInputError("review_source_changed_during_read")
+        digest.update(b"file-rows\0")
+        digest.update(struct.pack(">Q", file_rows))
+
+    by_user: dict[str, list[tuple[datetime, int, dict]]] = defaultdict(list)
+    by_item: dict[str, list[tuple[datetime, int, dict]]] = defaultdict(list)
+    by_review_id: dict[str, list[dict]] = defaultdict(list)
+    by_text_digest: dict[str, list[dict]] = defaultdict(list)
+    by_timestamp: dict[datetime, list[dict]] = defaultdict(list)
+    for row in rows:
+        row_time = row["timestamp"]
+        if row_time is not None:
+            indexed_row = (row_time, row["row_index"], row)
+            if row["user_id"] is not None:
+                by_user[row["user_id"]].append(indexed_row)
+            if row["item_id"] is not None:
+                by_item[row["item_id"]].append(indexed_row)
+            by_timestamp[row_time].append(row)
+        if row["raw_id"] is not None:
+            by_review_id[row["raw_id"]].append(row)
+        if row["text_digest"] is not None:
+            by_text_digest[row["text_digest"]].append(row)
+    for group in (*by_user.values(), *by_item.values()):
+        group.sort(key=lambda entry: (entry[0], entry[1]))
+
+    return {
+        "rows": rows,
+        "by_user": by_user,
+        "by_item": by_item,
+        "by_review_id": by_review_id,
+        "by_text_digest": by_text_digest,
+        "by_timestamp": by_timestamp,
+        "file_count": len(source_files),
+        "row_count": row_index,
+        "source_bytes": source_bytes,
+        "source_sha256": digest.hexdigest(),
+    }
+
+
+def load_selected_temporal_review_records(
+    paths: Iterable[str | Path], selected_indexes: set[int],
+) -> tuple[dict[int, dict], int, int, int, str]:
+    """Stream all source rows for version verification; retain selected rows only."""
+    source_files = _temporal_source_files(paths)
+    source_bytes = _preflight_temporal_review_sources(source_files)
+    digest = hashlib.sha256(b"temporal-review-records-v1\0")
+    selected: dict[int, dict] = {}
+    row_index = 0
+    for file_index, source in enumerate(source_files):
+        try:
+            before = source.stat()
+        except OSError as exc:
+            raise TemporalManifestInputError("review_source_unavailable") from exc
+        digest.update(b"file\0")
+        digest.update(struct.pack(">Q", file_index))
+        file_rows = 0
+        try:
+            for record in iter_records(source):
+                if row_index >= TEMPORAL_MAX_REVIEW_ROWS:
+                    raise TemporalManifestInputError(
+                        "review_source_record_limit_exceeded"
+                    )
+                _update_record_fingerprint(digest, record)
+                if row_index in selected_indexes:
+                    selected[row_index] = record
+                row_index += 1
+                file_rows += 1
+        except TemporalManifestInputError:
+            raise
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise TemporalManifestInputError("review_source_parse_failed") from exc
+        try:
+            after = source.stat()
+        except OSError as exc:
+            raise TemporalManifestInputError("review_source_changed_during_read") from exc
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise TemporalManifestInputError("review_source_changed_during_read")
+        digest.update(b"file-rows\0")
+        digest.update(struct.pack(">Q", file_rows))
+    if selected.keys() != selected_indexes.intersection(range(row_index)):
+        raise TemporalManifestInputError("selected_review_source_row_missing")
+    return (
+        selected, row_index, len(source_files), source_bytes, digest.hexdigest()
+    )
+
+
+def _review_identity_from_index(
+    task: dict, truth: dict, review_index: dict[str, Any], index: int,
+) -> dict[str, Any]:
+    extracted = _extract_task(task, index)
+    truth_info = _extract_task(truth, index)
+    for field in (
+        "user_id", "item_id", "target_review_id", "source_task_index",
+        "timestamp", "timestamp_source_field", "target_text_digest",
+        "target_stars",
+    ):
+        if extracted.get(field) is None:
+            extracted[field] = truth_info.get(field)
+
+    def matches_identity(rows):
+        return [
+            row for row in rows
+            if (extracted.get("user_id") is None
+                or row["user_id"] == extracted["user_id"])
+            and (extracted.get("item_id") is None
+                 or row["item_id"] == extracted["item_id"])
+        ]
+
+    matched = []
+    if extracted.get("target_review_id"):
+        matched = matches_identity(
+            review_index["by_review_id"].get(extracted["target_review_id"], ())
+        )
+    if not matched and extracted.get("target_text_digest"):
+        matched = matches_identity(
+            review_index["by_text_digest"].get(
+                extracted["target_text_digest"], ()
+            )
+        )
+    if not matched and extracted.get("timestamp"):
+        candidates = review_index["by_timestamp"].get(
+            extracted["timestamp"], ()
+        )
+        if extracted.get("target_stars") is not None:
+            candidates = [
+                row for row in candidates
+                if str(row["stars"]) == str(extracted["target_stars"])
+            ]
+        matched = matches_identity(candidates)
+
+    extracted["matched_target_rows"] = matched
+    if len(matched) == 1:
+        extracted["matched_target_row"] = matched[0]
+        row_time = matched[0]["timestamp"]
+        target_time = extracted.get("timestamp")
+        extracted["target_timestamp_consistent"] = (
+            None if target_time is None or row_time is None
+            else row_time == target_time
+        )
+    else:
+        extracted["matched_target_row"] = None
+        extracted["target_match_ambiguous"] = len(matched) > 1
+        extracted["target_timestamp_consistent"] = None
+    return extracted
 
 
 def _load_reviews(
@@ -875,13 +1205,14 @@ def _review_identity(
                    if row["timestamp"] == extracted["timestamp"]
                    and (extracted.get("target_stars") is None
                         or str(row["stars"]) == str(extracted["target_stars"]))]
+    extracted["matched_target_rows"] = matched
     if len(matched) == 1:
         extracted["matched_target_row"] = matched[0]
         row_time = matched[0]["timestamp"]
+        target_time = extracted.get("timestamp")
         extracted["target_timestamp_consistent"] = (
-            extracted.get("timestamp") is None
-            or row_time is None
-            or row_time == extracted["timestamp"]
+            None if target_time is None or row_time is None
+            else row_time == target_time
         )
     else:
         extracted["matched_target_row"] = None
@@ -890,15 +1221,16 @@ def _review_identity(
     return extracted
 
 
-def build_temporal_manifest(
+def _build_temporal_manifest_with_state(
     task_dir: str | Path,
     groundtruth_dir: str | Path,
     review_data: Iterable[str | Path],
     *,
     train_ratio: float = 0.6,
     validation_ratio: float = 0.2,
+    timestamp_semantics_caller_asserted: bool = False,
 ) -> dict[str, Any]:
-    """Build a no-text, time-safe manifest, never a model prediction input.
+    """Build a no-text, time-filtered manifest, never a model input by itself.
 
     Only reviews strictly earlier than a target time are visible. All known
     task groundtruth interactions are withheld from every context, even when a
@@ -909,6 +1241,8 @@ def build_temporal_manifest(
         raise ValueError("split ratios must be in [0, 1] and train_ratio > 0")
     if train_ratio + validation_ratio >= 1:
         raise ValueError("train_ratio + validation_ratio must be below 1")
+    semantics_caller_asserted = timestamp_semantics_caller_asserted is True
+    review_data = tuple(review_data)
 
     pairs, pairing = _load_task_pairs(task_dir, groundtruth_dir)
     task_ids = []
@@ -923,70 +1257,164 @@ def build_temporal_manifest(
         task_ids.append(task_info)
     relevant_users = {task["user_id"] for task in task_ids if task.get("user_id")}
     relevant_items = {task["item_id"] for task in task_ids if task.get("item_id")}
-    reviews, review_files, review_count = _load_reviews(
-        review_data, relevant_users=relevant_users, relevant_items=relevant_items
+    review_index = _load_temporal_review_index(
+        review_data,
+        relevant_users=relevant_users,
+        relevant_items=relevant_items,
     )
     task_rows = [
-        _review_identity(task, truth, reviews, index)
+        _review_identity_from_index(task, truth, review_index, index)
         for index, (task, truth) in enumerate(pairs)
     ]
 
+    # Ambiguous known targets are still withheld everywhere: ineligibility
+    # must not allow candidate target rows to become another task's history.
     heldout_keys = {
-        task["matched_target_row"]["row_key"]
-        for task in task_rows if task.get("matched_target_row")
+        row["row_key"]
+        for task in task_rows
+        for row in task.get("matched_target_rows", ())
+    }
+    heldout_review_ids = {
+        task["target_review_id"] for task in task_rows
+        if task.get("target_review_id")
     }
     heldout_texts = {
         task["target_text_digest"]
         for task in task_rows if task.get("target_text_digest")
     }
-    heldout_user_times = {
-        (task["user_id"], task["timestamp"])
-        for task in task_rows
-        if task.get("user_id") and task.get("timestamp")
+    heldout_user_times = set()
+    heldout_item_times = set()
+    for task in task_rows:
+        if task.get("user_id") and task.get("timestamp"):
+            heldout_user_times.add((task["user_id"], task["timestamp"]))
+        if task.get("item_id") and task.get("timestamp"):
+            heldout_item_times.add((task["item_id"], task["timestamp"]))
+        for source_target in task.get("matched_target_rows", ()):
+            source_time = source_target.get("timestamp")
+            if source_time is None:
+                continue
+            source_user_id = task.get("user_id") or source_target.get("user_id")
+            source_item_id = task.get("item_id") or source_target.get("item_id")
+            if source_user_id:
+                heldout_user_times.add((source_user_id, source_time))
+            if source_item_id:
+                heldout_item_times.add((source_item_id, source_time))
+    # If no source row can be identified at all, the label's source event may
+    # still be present under an unexpected ID/date. Suppress all derived
+    # history for that user and all references for that item rather than
+    # guessing which row was the target.
+    unresolved_target_users = {
+        task["user_id"] for task in task_rows
+        if task.get("user_id") and not task.get("matched_target_rows")
     }
-    heldout_item_times = {
-        (task["item_id"], task["timestamp"])
-        for task in task_rows
-        if task.get("item_id") and task.get("timestamp")
+    unresolved_target_items = {
+        task["item_id"] for task in task_rows
+        if task.get("item_id") and not task.get("matched_target_rows")
     }
+    suppress_all_user_history = any(
+        not task.get("user_id") and not task.get("matched_target_rows")
+        for task in task_rows
+    )
+    suppress_all_item_references = any(
+        not task.get("item_id") and not task.get("matched_target_rows")
+        for task in task_rows
+    )
     eligible = [task for task in task_rows
                 if task.get("user_id") and task.get("item_id")
                 and task.get("timestamp")
                 and task.get("matched_target_row")
-                and task.get("target_timestamp_consistent") is not False]
+                and task.get("target_timestamp_consistent") is True]
     eligible.sort(key=lambda task: (task["timestamp"], task["index"]))
 
+    # Time ties are indivisible: all tasks at one event timestamp must land in
+    # the same split, or validation labels could influence same-time test tasks.
+    timestamp_groups: list[list[dict]] = []
+    for task in eligible:
+        if (
+            not timestamp_groups
+            or timestamp_groups[-1][0]["timestamp"] != task["timestamp"]
+        ):
+            timestamp_groups.append([])
+        timestamp_groups[-1].append(task)
     n = len(eligible)
-    train_end = int(n * train_ratio)
-    validation_end = int(n * (train_ratio + validation_ratio))
+    boundaries = [0]
+    for group in timestamp_groups:
+        boundaries.append(boundaries[-1] + len(group))
+    target_train_end = n * train_ratio
+    target_validation_end = n * (train_ratio + validation_ratio)
+    if len(timestamp_groups) >= 3 and validation_ratio > 0:
+        boundary_pairs = [
+            (train_end, validation_end)
+            for train_end in boundaries[1:-1]
+            for validation_end in boundaries[1:-1]
+            if train_end < validation_end
+        ]
+    elif len(timestamp_groups) >= 2:
+        boundary_pairs = [
+            (train_end, validation_end)
+            for train_end in boundaries[1:-1]
+            for validation_end in boundaries[1:-1]
+            if (
+                train_end <= validation_end
+                and (validation_ratio > 0 or train_end == validation_end)
+            )
+        ]
+    else:
+        boundary_pairs = [(train_end, validation_end)
+                          for train_end in boundaries
+                          for validation_end in boundaries
+                          if train_end <= validation_end]
+    if boundary_pairs:
+        train_end, validation_end = min(
+            boundary_pairs,
+            key=lambda pair: (
+                abs(pair[0] - target_train_end)
+                + abs(pair[1] - target_validation_end),
+                pair[0], pair[1],
+            ),
+        )
+    else:
+        train_end = validation_end = 0
+
     seen_users: set[str] = set()
     user_group_ids: dict[str, str] = {}
     output_rows: list[dict[str, Any]] = []
+    previous_timestamp = None
+    users_at_timestamp: set[str] = set()
     for chronological_index, task in enumerate(eligible):
         user_id = task["user_id"]
         item_id = task["item_id"]
         target_time = task["timestamp"]
+        if previous_timestamp is not None and target_time != previous_timestamp:
+            seen_users.update(users_at_timestamp)
+            users_at_timestamp.clear()
+        previous_timestamp = target_time
         is_repeat = user_id in seen_users
-        seen_users.add(user_id)
+        users_at_timestamp.add(user_id)
         if user_id not in user_group_ids:
             user_group_ids[user_id] = f"U{len(user_group_ids) + 1:04d}"
 
+        history_entries = review_index["by_user"].get(user_id, ())
+        history_end = bisect_left(history_entries, (target_time, -1, None))
         visible_history = [
-            row for row in reviews
-            if row["user_id"] == user_id
-            and row["timestamp"] is not None
-            and row["timestamp"] < target_time
+            row for _, _, row in history_entries[:history_end]
+            if not suppress_all_user_history
+            and user_id not in unresolved_target_users
             and row["row_key"] not in heldout_keys
+            and row["raw_id"] not in heldout_review_ids
             and row["text_digest"] not in heldout_texts
             and (row["user_id"], row["timestamp"]) not in heldout_user_times
         ]
+        reference_entries = review_index["by_item"].get(item_id, ())
+        reference_end = bisect_left(reference_entries, (target_time, -1, None))
         visible_item_refs = [
-            row for row in reviews
-            if row["item_id"] == item_id
+            row for _, _, row in reference_entries[:reference_end]
+            if not suppress_all_item_references
+            and item_id not in unresolved_target_items
+            and row["user_id"] is not None
             and row["user_id"] != user_id
-            and row["timestamp"] is not None
-            and row["timestamp"] < target_time
             and row["row_key"] not in heldout_keys
+            and row["raw_id"] not in heldout_review_ids
             and row["text_digest"] not in heldout_texts
             and (row["item_id"], row["timestamp"]) not in heldout_item_times
         ]
@@ -1007,12 +1435,37 @@ def build_temporal_manifest(
         else:
             split = "test"
 
+        def source_fingerprints(rows):
+            return [
+                {
+                    "row_index": row["row_index"],
+                    "event_time": row["timestamp"].isoformat(),
+                    "text_sha256": row["text_digest"],
+                    "stars": row["stars"],
+                    "useful": row["useful"],
+                    "funny": row["funny"],
+                    "cool": row["cool"],
+                }
+                for row in rows
+            ]
+
         context_payload = {
-            "history_rows": [row["row_index"] for row in visible_history],
-            "item_reference_rows": [row["row_index"] for row in visible_item_refs],
+            "target_timestamp_sha256": hashlib.sha256(
+                task["timestamp"].isoformat().encode("utf-8")
+            ).hexdigest(),
+            "history_rows": source_fingerprints(visible_history),
+            "item_reference_rows": source_fingerprints(visible_item_refs),
         }
+        source_task_index = task.get("source_task_index")
         output_rows.append({
             "task_index": task["index"],
+            "source_task_index_sha256": (
+                hashlib.sha256(str(source_task_index).encode("utf-8")).hexdigest()
+                if source_task_index is not None else None
+            ),
+            "target_timestamp_sha256": context_payload[
+                "target_timestamp_sha256"
+            ],
             "execution_order": chronological_index,
             "split": split,
             "user_group": user_group_ids[user_id],
@@ -1046,19 +1499,55 @@ def build_temporal_manifest(
             reasons.append("target_review_not_uniquely_matched")
         if task.get("target_timestamp_consistent") is False:
             reasons.append("target_timestamp_conflicts_with_matched_review")
+        elif (
+            task.get("matched_target_row")
+            and task.get("target_timestamp_consistent") is None
+        ):
+            reasons.append("matched_target_review_time_unverified")
         if reasons:
             ineligible_reasons.update(reasons)
-    return {
-        "schema_version": 1,
+    manifest = {
+        "schema_version": 2,
         "manifest_type": "strict_temporal_no_groundtruth_context",
         "pairing": pairing,
-        "source_review_files": review_files,
-        "source_review_rows": review_count,
+        "source_review_files": review_index["file_count"],
+        "source_review_rows": review_index["row_count"],
+        "source_review_bytes": review_index["source_bytes"],
+        "source_review_sha256": review_index["source_sha256"],
+        "source_review_fingerprint_kind": "canonical_parsed_records_v1",
         "task_count": len(task_rows),
         "eligible_task_count": len(eligible),
         "ineligible_task_count": ineligible,
         "ineligible_reasons": dict(ineligible_reasons),
+        "manifest_audit_status": (
+            "ready_for_runtime_review" if eligible
+            else "audit_only_no_eligible_tasks"
+        ),
+        "runtime_eligible": bool(eligible),
+        "runtime_rejection_reasons": (
+            [] if eligible else [
+                reason for condition, reason in (
+                    (not task_rows, "no_paired_tasks"),
+                    (review_index["row_count"] == 0, "empty_review_source"),
+                    (not eligible, "no_eligible_tasks"),
+                ) if condition
+            ]
+        ),
+        # A manifest cannot verify domain semantics. This remains false even
+        # when the caller records an owner-review assertion below.
         "target_timestamp_semantics_verified": False,
+        "target_timestamp_semantics_caller_asserted": (
+            semantics_caller_asserted
+        ),
+        "timestamp_semantics_confirmation": (
+            "caller_asserted" if semantics_caller_asserted
+            else "not_confirmed"
+        ),
+        "split_policy": {
+            "train_ratio": train_ratio,
+            "validation_ratio": validation_ratio,
+            "timestamp_ties": "indivisible_group",
+        },
         "timestamp_semantics_note": (
             "The parser recognizes common date/time field names; a domain owner "
             "must verify that the chosen field is the review event time before "
@@ -1069,12 +1558,27 @@ def build_temporal_manifest(
             "ambiguous": sum(bool(task.get("target_match_ambiguous")) for task in task_rows),
             "unmatched": sum(not task.get("matched_target_row") for task in task_rows),
         },
+        "review_context_suppression": {
+            "unresolved_target_user_count": len(unresolved_target_users),
+            "unresolved_target_item_count": len(unresolved_target_items),
+            "suppress_all_user_history": suppress_all_user_history,
+            "suppress_all_item_references": suppress_all_item_references,
+            "policy": "suppress review-derived context for unmatched targets",
+        },
         "split_counts": dict(Counter(row["split"] for row in output_rows)),
-        "order_policy": "target timestamp ascending; source task index breaks ties",
+        "order_policy": (
+            "target timestamp ascending; natural source-task order breaks ties; "
+            "same-time tasks are not temporally prior to one another"
+        ),
+        "split_boundary_policy": (
+            "nearest task-count ratio boundaries between timestamp groups; "
+            "same-time tasks never span splits"
+        ),
         "history_policy": (
             "strictly earlier timestamp only; target must uniquely match a "
             "source review row; all known groundtruth target rows are withheld "
-            "from all task contexts"
+            "from all task contexts; if no source row matches, suppress all "
+            "review-derived context for that target user/item"
         ),
         "ablation_policy": (
             "reuse this exact task order, split and context manifest for every "
@@ -1083,6 +1587,41 @@ def build_temporal_manifest(
         "tasks": output_rows,
         "privacy": "no raw IDs, groundtruth ratings, review text, or prompts included",
     }
+    state = {
+        "pairs": pairs,
+        "pairing": pairing,
+        "review_index": review_index,
+        "task_rows": task_rows,
+        "heldout_keys": heldout_keys,
+        "heldout_review_ids": heldout_review_ids,
+        "heldout_texts": heldout_texts,
+        "heldout_user_times": heldout_user_times,
+        "heldout_item_times": heldout_item_times,
+    }
+    return manifest, state
+
+
+def build_temporal_manifest(
+    task_dir: str | Path,
+    groundtruth_dir: str | Path,
+    review_data: Iterable[str | Path],
+    *,
+    train_ratio: float = 0.6,
+    validation_ratio: float = 0.2,
+    timestamp_semantics_caller_asserted: bool = False,
+) -> dict[str, Any]:
+    """Build a no-text audit manifest; this alone is not runtime context."""
+    manifest, _ = _build_temporal_manifest_with_state(
+        task_dir,
+        groundtruth_dir,
+        review_data,
+        train_ratio=train_ratio,
+        validation_ratio=validation_ratio,
+        timestamp_semantics_caller_asserted=(
+            timestamp_semantics_caller_asserted
+        ),
+    )
+    return manifest
 
 
 def _read_json_array(path: str | Path) -> list[dict]:
@@ -1645,6 +2184,24 @@ def _write_report(report: dict, output: str | None) -> None:
     print(rendered)
 
 
+def _validate_manifest_cli_inputs(args, result: dict[str, Any] | None = None) -> None:
+    for directory in (args.task_dir, args.groundtruth_dir):
+        root = Path(directory)
+        if not root.is_dir() or not _files(root):
+            raise TemporalManifestInputError("task_or_groundtruth_source_missing")
+    for source in args.review_data:
+        path = Path(source)
+        if not path.exists() or not _files(path):
+            raise TemporalManifestInputError("review_source_missing")
+
+    _, source_pairing = _load_task_pairs(args.task_dir, args.groundtruth_dir)
+    pairing = (result or {}).get("pairing") or source_pairing
+    if pairing.get("warnings") or pairing.get("alignment") != "natural_filename_order":
+        raise TemporalManifestInputError("task_groundtruth_pairing_unreliable")
+    if (result or {}).get("task_count", 1 if source_pairing.get("task_count") else 0) <= 0:
+        raise TemporalManifestInputError("no_paired_tasks")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Offline, privacy-conscious memory/data leakage audits."
@@ -1665,13 +2222,18 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--output")
 
     manifest = subparsers.add_parser(
-        "manifest", help="Build a strict time-safe, text-free task manifest."
+        "manifest", help="Build a strict time-filtered, text-free manifest."
     )
     manifest.add_argument("--task-dir", required=True)
     manifest.add_argument("--groundtruth-dir", required=True)
     manifest.add_argument("--review-data", nargs="+", required=True)
     manifest.add_argument("--train-ratio", type=float, default=0.6)
     manifest.add_argument("--validation-ratio", type=float, default=0.2)
+    manifest.add_argument(
+        "--confirm-target-timestamp-semantics", action="store_true",
+        help=("Caller assertion only: use after the data owner verifies the "
+              "field is the review event time."),
+    )
     manifest.add_argument("--output")
 
     run = subparsers.add_parser(
@@ -1713,19 +2275,18 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         elif args.command == "manifest":
+            _validate_manifest_cli_inputs(args)
             result = build_temporal_manifest(
                 args.task_dir,
                 args.groundtruth_dir,
                 args.review_data,
                 train_ratio=args.train_ratio,
                 validation_ratio=args.validation_ratio,
+                timestamp_semantics_caller_asserted=(
+                    args.confirm_target_timestamp_semantics
+                ),
             )
-            result["manifest_summary"] = {
-                key: result[key] for key in (
-                    "task_count", "eligible_task_count", "ineligible_task_count",
-                    "split_counts", "source_review_rows",
-                )
-            }
+            _validate_manifest_cli_inputs(args, result)
         else:
             full_diagnostics = _read_json_array(args.full_diagnostics)
             full_records = _read_json_array(args.full_records)
@@ -1751,6 +2312,9 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
             )
         _write_report(result, args.output)
+    except TemporalManifestInputError as exc:
+        print(f"audit failed: {exc.code}", file=sys.stderr)
+        return 2
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"audit failed: {type(exc).__name__}", file=sys.stderr)
         return 2

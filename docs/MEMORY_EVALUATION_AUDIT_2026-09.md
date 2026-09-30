@@ -59,11 +59,11 @@ CLI 不保存任何私有输入；`--output` 只写脱敏汇总。输入 trace �
 
 ### 3. 严格时间清单与校准 helper
 
-`build_temporal_manifest()` 为每个目标任务要求用户、物品、可解析目标时点及**唯一匹配的目标源评论行**；用户历史与目标物品参考只能使用严格早于目标时点的行。无法唯一匹配目标源行的任务不进入严格清单。所有能从 groundtruth/任务匹配到的目标交互都会从**所有任务**上下文剔除，避免较早测试目标被误用作后续真实反馈；同时间戳也不可见。目标评论文本摘要还做第二层排除检查。每任务清单包含 train/validation/test 时间序、首现/复现层、上下文源行序号/数量和哈希，不包含真值星级、原始 ID 或评论。
+`build_temporal_manifest()` 为每个目标任务要求用户、物品、可解析目标时点及**唯一匹配的目标源评论行**；用户历史与目标物品参考只能使用严格早于目标时点的行。无法唯一匹配目标源行的任务不进入严格清单。所有能从 groundtruth/任务匹配到的目标交互都会从**所有任务**上下文剔除，避免较早测试目标被误用作后续真实反馈；同时间戳也不可见。目标评论文本摘要还做第二层排除检查。相同 target timestamp 的任务作为不可拆分组分配到同一 split，first-seen/repeat 也以时间戳组而非组内文件顺序计算。每任务清单包含 train/validation/test 时间序、首现/复现层、上下文源行序号/数量和源内容摘要哈希，不包含真值星级、原始 ID 或评论。
 
-限制：通用别名（`date`、`timestamp` 等）只是候选字段，无法从字段名证明它代表真实评论发生时间。manifest 明示 `target_timestamp_semantics_verified=false`，需数据拥有者确认语义；遇到缺失用户/物品/时间或匹配时间冲突会把任务排除并统计原因。对无可信时间的旧数据，严格方案是禁用用户评论历史、由全量评论派生的画像统计和目标物品评论，只保留确定在预测前可见的静态输入；仅“留一条目标评论”不够排除未来交互。
+限制：通用别名（`date`、`timestamp` 等）只是候选字段，无法从字段名证明它代表真实评论发生时间。manifest 默认写 `target_timestamp_semantics_verified=false`；只有数据拥有者核实语义后，调用方才可显式记录 caller assertion 为 true，这个 JSON 位本身不是语义验证。遇到缺失用户/物品/时间或匹配时间冲突会把任务排除并统计原因。对无可信时间的旧数据，严格方案是禁用用户评论历史、由全量评论派生的画像统计和目标物品评论，只保留确定在预测前可见的静态输入；仅“留一条目标评论”不够排除未来交互。
 
-`score_calibration.evaluate_temporal_calibration()` 只用 manifest 的 validation 行拟合预先选定的校准器，train 不用于拟合，test 只做一次末端评估；测试证明更改测试标签不影响拟合参数。现有综合 runner 的旧校准开关仍使用随机 train/validation 切分，尚未接入时间 manifest，也没有本地真实集成验证。
+`score_calibration.evaluate_temporal_calibration()` 只用 manifest 的 validation 行拟合预先选定的校准器，train 不用于拟合，test 只做一次末端评估；测试证明更改测试标签不影响拟合参数。旧 `calculate_calibrated_metrics()` 仍使用随机 task split，现在明确输出 `calibration_split_protocol=random_task_split_not_temporal`、`time_safe=false`；它不是时间安全校准，temporal helper 也尚未接入真实 Simulator。
 
 ### 4. 分数诊断和配对不确定性
 
@@ -128,12 +128,64 @@ CLI 不保存任何私有输入；`--output` 只写脱敏汇总。输入 trace �
 5. 先运行 Goodreads 实际召回案例的离线逐任务对照，再讨论任何在线试验；本会话没有启动新的 API 实验。任何付费/在线扩大样本实验需另行确认预算、模型与 API 权限。
 6. 注册四种预先声明的消融：无跨任务记忆；仅先前生成评论（无真值反馈）；仅截至时点可信真实历史统计；真实历史统计 + 生成评论。所有处理共用相同任务、顺序、seed、任务可见上下文及模型设置。验证集拟合/选定校准后，仅在保留测试集报告一次；同时给整体与 first-seen/repeat 分层指标、user-cluster paired bootstrap。
 
+## 2026-09-30：manifest 消费与 fail-closed 离线原型
+
+本轮新增 `temporal_context.py`，但**没有声称真实框架路径安全，也没有启动真实/付费评测**：
+
+- `TemporalContextProvider` 只接受 schema v2 manifest，且要求调用者已显式声明时间字段语义。该字段记录的是 caller assertion，不是代码能替数据拥有者完成的验证。Provider 从当前本地 task、groundtruth、review 数据重新构建 manifest，要求 task/label 文件 stem 精确配对；多记录文件还必须在 task 与 groundtruth 两侧具有唯一且相等的显式 task index，且 user/item/target identity 不冲突。manifest 包含全体解析 review 记录（含顺序和文件边界）的 canonical fingerprint、源记录数/字节数和上下文行指纹；provider 在第二次流式读取时只保留被选中的原始上下文行，并核对同一 fingerprint。原始 review 不再用 `dict(iter_review_records(...))` 全量驻留内存。Manifest 的 row indexes / hashes 只是核对材料，不被直接当作 Agent 上下文。
+- 缺少唯一目标 source row、重复 target ID/text 候选或目标源 review 自身缺少/冲突事件时间时，该任务不进入 eligible context。歧义 target 的所有已识别候选也会从后续所有上下文屏蔽；若无法匹配且 user/item key 缺失，则分别全局关闭所有 user-history 或 item-reference 通道，而不是猜测目标来源。
+- `TemporalInteractionTool` 仅提供当前 task 的已过滤 user history 和他人对当前 item 的已过滤 references；`get_user()` 不提供从全量评论派生的计数/均值画像，`get_item()` 仅返回最小静态占位字段。groundtruth 只参与 source-target 识别/剔除，不进入 task payload、stats、prompt 或 generated memory。
+- 独立单任务 runner 直接按 manifest `execution_order` 串行创建 Agent。生成评论记忆只从严格早于当前 target timestamp 的任务读取；即使 source-order tie-break 把同时间任务排在前面，也不会把同时间 peer 的生成结果当作过去记忆。它不依赖 `max_workers=1` 或外部 Simulator 调度，并验证不同消融的 task index、执行序和运行时 context digest 完全相同。prompt 纳入诊断在实际渲染 history/reference 区段时记录来源行，不使用全文子串反推；无法关联 source index 的已渲染行计为 unknown。不记录原文。
+- 四个离线合同：`No_Memory` = 两类真实历史 context 照常共享、无跨任务 memory；`Generated_Review_Memory` = 额外只注入先前 Agent 自己生成的 review/stars；`Trusted_History_Stats` = 额外只注入严格可见真实历史统计；`Combined` = 后两项并用。统计和生成记忆来源隔离。Trusted stats 是**离线原型**，只有获准数据的事件时间语义经拥有者核实后才可解释为可信统计。
+- **明确的资源边界**：temporal manifest/provider 在解析前拒绝磁盘体积或 `.gz` 解压后内容大于 64 MiB 的 review 源，并最多处理 100,000 条解析记录；超限错误只报安全类别，不输出路径、ID 或文本。按用户/物品建索引后，任务匹配和上下文候选使用目标索引，不再对每个 task 重扫全部 reviews；全量源只做固定次数流式验证，另有 manifest 本身不可避免的可见上下文输出量。该原型只用于小型 synthetic/获准 fixture，不承诺大数据性能。已知约 4.22 GB 的历史 review.json 超出门槛，会在分配 review 元数据前拒绝，不能用于本实现运行。
+- **审计与运行分离**：在文件/任务配对可靠且源路径存在时，零 eligible 的 manifest 可作为审计输出成功写出，带 `audit_only_no_eligible_tasks`、拒绝原因及 `runtime_eligible: false`；它不是可运行清单。provider 对零 task、零 source record、零 eligible context 一律拒绝。缺失源、身份冲突、stem/多记录对齐不可靠则 `memory_audit.py manifest` 以非零退出码失败；输出只有固定类别，不带本地路径或用户标识。
+- 旧 `ExperimentRunner` 的 Simulator Adapter 尚无法约束 framework 内部的 `get_reviews(user_id/item_id)`、隐藏用户聚合、全部 prompt builder 或输出顺序。其每个结果现在明确标注 `temporal_safety=not_verified_legacy_simulator_context`；CLI 的 `--temporal-manifest` 或 `--temporal-ablation-mode` 会在 API-key 检查、Simulator 导入、结果目录创建之前拒绝执行。Legacy 模式保持兼容，但不能称作 time-safe。
+- `build_per_task_records()` 现在拒绝 output/groundtruth 长度不等，避免 `zip()` 静默截断；旧位置 index 仍只是 Simulator 返回位置，不能证明 source task 对齐。
+
+### 离线复现（不连 Simulator/API）
+
+```powershell
+# 合成多用户/多任务 fixture：严格过滤、全部 label 隔离、相同 context/order、四消融
+& .\.venv\Scripts\python.exe -m pytest tests/test_temporal_context.py tests/test_memory_audit.py -q
+
+# 全量离线验证与 lint
+& .\.venv\Scripts\python.exe -m pytest -q
+& .\.venv\Scripts\ruff.exe check .
+& .\.venv\Scripts\python.exe comprehensive_evaluation.py --dry-run --task-set goodreads --num-tasks 2 --max-workers 1 --experiment Full No_Memory
+```
+
+有获准的本地数据后，先由数据拥有者核对所用 timestamp 字段确为评论事件时间，再生成 schema v2 manifest：
+
+```powershell
+& .\.venv\Scripts\python.exe memory_audit.py manifest `
+  --task-dir $env:LOCAL_TASK_DIR `
+  --groundtruth-dir $env:LOCAL_GROUNDTRUTH_DIR `
+  --review-data $env:LOCAL_REVIEW_DATA `
+  --train-ratio 0.6 --validation-ratio 0.2 `
+  --confirm-target-timestamp-semantics `
+  --output $env:LOCAL_TEMPORAL_MANIFEST
+```
+
+该开关只是显式 caller assertion，不能替代字段审阅。随后可在本地 Python 进程构造 `TemporalContextProvider(task_dir, groundtruth_dir, [review_data], manifest)` 并检查 eligible contexts；如执行 fake ablation，只能传入明确的 fake `llm_factory` 到 `run_temporal_ablation_suite`。旧 Simulator 入口的时序选项当前预期以退出码 2 拒绝：
+
+```powershell
+& .\.venv\Scripts\python.exe comprehensive_evaluation.py `
+  --temporal-manifest $env:LOCAL_TEMPORAL_MANIFEST `
+  --temporal-ablation-mode Trusted_History_Stats
+```
+
+### 真实复核所需资产与门槛
+
+需用户在本机/获准 Drive 提供并保持本地：①自然文件排序和 task↔groundtruth 配对经过确认的 tasks 与 groundtruth；②相同数据版本的处理后 review 源（稳定 review/user/item ID、星级、文本、数据字典及可信事件时间含义）；③数据拥有者对时间字段语义的书面/可追溯确认，以及 manifest eligible/ineligible 列表的本地审核；④2026-09-26 Full/No_Memory 逐任务预测、真值 index、source task index、workflow execution order、memory candidate/recall/prompt 纳入 diagnostics；⑤如复核 prompt 暴露，提供只在本地读取的实际 prompt trace；⑥固定版本 Simulator wheel/source 和任务 loader、interaction-tool、profile aggregation、thread/order 的契约证据。
+
+在真实框架接入门槛全部通过前，不得把 `TemporalInteractionTool` 测试称为真实 Simulator 集成；必须证明框架每个 user/item 评论入口、用户聚合字段和最终 Agent prompt 都只消费该 provider 的安全 context，并证明单任务/多配置输出 index 对齐。任何之后的在线/付费运行仍需另行确认预算与 API 权限。本工作区当前没有上述真实数据、Drive 产物或框架安装，因此没有实测统计，也没有泄漏“已发生/已排除”的结论。
+
 ## 面试可讲的真实故事
 
-> 我先把跨任务 Memory 接进了 Agent，并用写入次数和小型重复用户 fake 确认它能工作。全面配对结果出来后，我没有把微小 RMSE 差异包装成效果：逐任务诊断显示 Yelp/Amazon 实际召回为零，Goodreads 也只有 2/400。于是我把问题从“Memory 是否提升评分”重新拆成“候选→实际读取→prompt 纳入→同任务误差”，补上无原文的执行序号/匿名分组诊断、泄漏审计和时间安全 manifest，并单独检查了评分正偏差。结论是机制 wiring 已有合成测试，真实收益与 Goodreads 两例归因仍待本地逐任务产物和可信时间数据验证。
+> 我先把跨任务 Memory 接进了 Agent，并用写入次数和小型重复用户 fake 确认它能工作。全面配对结果出来后，我没有把微小 RMSE 差异包装成效果：逐任务诊断显示 Yelp/Amazon 实际召回为零，Goodreads 也只有 2/400。于是我把问题从“Memory 是否提升评分”重新拆成“候选→实际读取→prompt 纳入→同任务误差”，补上无原文的执行序号/匿名分组诊断、泄漏审计和时间过滤 prototype，并单独检查了评分正偏差。结论是机制 wiring 已有合成测试，真实收益与 Goodreads 两例归因仍待本地逐任务产物和可信时间数据验证。
 
 不要说“Memory 已提升准确率”或“已证明无泄漏”。现在可验证的交付是评测可证伪性与复现基础，而不是性能胜利。
 
 ## 离线验证记录
 
-本阶段交付验收（含三项回归测试）：`pytest -q` **150 passed**；`ruff check .` 通过；`git diff --check` 通过；`comprehensive_evaluation.py --dry-run --task-set goodreads --num-tasks 2 --max-workers 1 --experiment Full No_Memory` 通过。上述检查不需要 Simulator、网络、API key 或真实数据。Luna 阶段还对修改的 Python 模块执行过 `compileall`。
+本阶段离线验证：`pytest -q` **181 passed**；`ruff check .`、`git diff --check` 和 Goodreads Full/No_Memory dry-run 均通过；还覆盖了 CLI 输出的 manifest 文件由 provider 成功重建消费的合成端到端路径。Temporal fixture 由 fake 单任务执行，不需要 Simulator、网络、API key 或真实数据。没有运行真实数据评测或 API 请求。

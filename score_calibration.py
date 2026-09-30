@@ -5,6 +5,7 @@ on a validation split. It is dependency-free and deterministic so it can be
 unit-tested offline.
 """
 
+import math
 import random
 
 from improved_agent_with_quality import normalize_stars
@@ -136,6 +137,7 @@ def evaluate_temporal_calibration(records, split_by_index, method="bias"):
         raise ValueError(f"unknown calibration method: {method}")
     if not isinstance(split_by_index, dict):
         raise ValueError("split_by_index must map task indexes to split names")
+    allowed_splits = {"train", "validation", "test"}
 
     valid_records = []
     seen_indexes = set()
@@ -147,12 +149,17 @@ def evaluate_temporal_calibration(records, split_by_index, method="bias"):
             actual = float(record["actual"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("records need numeric index, predicted, actual") from exc
+        if not math.isfinite(predicted) or not math.isfinite(actual):
+            raise ValueError("predicted and actual values must be finite")
         if index in seen_indexes:
             raise ValueError("task indexes must be unique")
         seen_indexes.add(index)
         if index not in split_by_index:
             raise ValueError(f"task index {index} has no declared split")
-        valid_records.append((index, predicted, actual, split_by_index[index]))
+        split = split_by_index[index]
+        if split not in allowed_splits:
+            raise ValueError(f"unknown temporal split for task index {index}")
+        valid_records.append((index, predicted, actual, split))
 
     calibration = [row for row in valid_records if row[3] == "validation"]
     test = [row for row in valid_records if row[3] == "test"]
@@ -181,6 +188,7 @@ def evaluate_temporal_calibration(records, split_by_index, method="bias"):
         }
 
     return {
+        "evaluation_protocol": "explicit_temporal_validation_fit_test_only",
         "calibration_method": method,
         "train_rows_not_used_for_calibration": train_count,
         "validation_rows_used_to_fit_calibrator": len(calibration),

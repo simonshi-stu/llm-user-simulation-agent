@@ -132,3 +132,23 @@ class TestSplitAndRmse:
                 {0: "train", 1: "validation", 2: "validation"},
                 method="bias",
             )
+
+    def test_temporal_calibration_rejects_unknown_split_and_nonfinite_labels(self):
+        with pytest.raises(ValueError, match="unknown temporal split"):
+            evaluate_temporal_calibration(
+                [
+                    {"index": 0, "predicted": 3.0, "actual": 4.0},
+                    {"index": 1, "predicted": 4.0, "actual": 5.0},
+                    {"index": 2, "predicted": 2.0, "actual": 3.0},
+                ],
+                {0: "train", 1: "validation", 2: "holdout"},
+            )
+        with pytest.raises(ValueError, match="finite"):
+            evaluate_temporal_calibration(
+                [
+                    {"index": 0, "predicted": 3.0, "actual": 4.0},
+                    {"index": 1, "predicted": 4.0, "actual": 5.0},
+                    {"index": 2, "predicted": float("nan"), "actual": 3.0},
+                ],
+                {0: "validation", 1: "validation", 2: "test"},
+            )

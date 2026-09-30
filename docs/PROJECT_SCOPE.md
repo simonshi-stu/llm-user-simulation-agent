@@ -16,6 +16,7 @@ framework source into the project history.
 | `local_memory.py` | Dependency-free, bounded, user-scoped memory for within-run ablations | Personal implementation |
 | `comprehensive_evaluation.py` | Experiment runner, metric calculation, result persistence and report helpers | Personal evaluation work |
 | `memory_audit.py` | No-LLM redacted audit, prompt-trace checks and temporal manifests | Personal evaluation tooling |
+| `temporal_context.py` | Fail-closed manifest revalidation, current-source context reconstruction and serial offline ablation prototype | Personal offline evaluation tooling; not a Simulator adapter |
 | `inspect_agent_output.py` | Interactive task-level output inspection and error display | Personal tooling |
 | `final_project.ipynb` | Course experiment notebook and execution record | Personal experiment artifact |
 | `ablation_results_yelp_clean.json` | Yelp archived metrics | Personal experiment result |
@@ -45,13 +46,17 @@ discipline, failure handling and reproducibility.
 > `--dry-run` smoke check, hybrid reference ranking, structured JSON output,
 > conditional reflection, safety checks, calibration helpers, per-task paired
 > statistics, run-local Memory, privacy-conscious data/prompt audits and a
-> strict temporal-manifest builder are implemented and offline-tested
+> strict temporal-manifest builder and a framework-independent temporal context
+> provider/four-mode fake ablation suite are implemented and synthetic-tested
 > (see `docs/PROJECT_GUIDE.md` and
 > `docs/MEMORY_EVALUATION_AUDIT_2026-09.md`). Remaining gaps: no authorized
 > task/groundtruth/processed-review assets or 2026 per-task artifacts are
 > available in this checkout; temporal fields and Simulator ordering are not
-> verified here; the manifest is not yet wired into the live Simulator adapter;
-> calibration/statistics lack real-task validation; retrieval is lexical, not
+> verified here; the real Simulator adapter remains deliberately fail-closed
+> because full user/item review, profile, prompt and output-order contracts are
+> not verified. `Trusted_History_Stats` is an offline prototype pending owner
+> confirmation of event-time semantics; legacy random-split calibration is not
+> temporal. Calibration/statistics lack real-task validation; retrieval is lexical, not
 > embedding-based. A focused live synthetic wiring check is recorded in
 > `docs/SYNTHETIC_MEMORY_ABLATION.md`; session-provided 2026 aggregate results
 > are interpreted separately in the audit report and are not local artifacts.
@@ -83,7 +88,8 @@ discipline, failure handling and reproducibility.
 
 - Preserve per-task errors and use paired bootstrap confidence intervals or a
   paired statistical test instead of a scalar relative-difference helper.
-- Audit candidate/actual/prompt Memory coverage and use a time-safe manifest;
+- Audit candidate/actual/prompt Memory coverage and consume a time-filtered manifest
+  only after the event-time semantics and source context are independently reviewed;
   treat generated comments as predictions, never as trusted feedback labels.
 - Run every ablation with the same task IDs, seed policy, model settings and
   budget.

@@ -67,20 +67,26 @@ Task
   - simulator execution and LLM usage tracking
   - fresh local memory store per memory-enabled experiment configuration
   - RMSE, MAE, accuracy, distribution and correlation metrics
-  - per-task records and diagnostics, held-out calibration, paired bootstrap tests
+  - per-task records and diagnostics, legacy random-split calibration (not temporal),
+    paired bootstrap tests
   - comparison and ablation report generation
 - `memory_audit.py`
   - offline repeated-user and review-leakage audit with redacted output
-  - strict temporal split manifest and optional prompt-trace inspection
+  - time-filtered split manifest (event-time semantics require owner confirmation)
+    and optional prompt-trace inspection
   - per-task Memory candidate/recall/prompt-inclusion analysis
+- `temporal_context.py`
+  - manifest revalidation against current local task/review sources
+  - fail-closed context provider and framework-free, serial ablation prototype
+  - `No_Memory`, `Generated_Review_Memory`, `Trusted_History_Stats`, `Combined`
 - `score_calibration.py`
-  - bias and linear score calibrators with a validation split
+  - bias and linear score calibrators; explicit temporal validation/test helper
 - `inspect_agent_output.py`
   - interactive single-task inspection
   - predicted-vs-ground-truth comparison
   - generated review inspection
 - `tests/`
-  - 150 offline tests covering the agent, evaluation, calibration and memory audit
+  - 181 offline tests covering the agent, evaluation, calibration and temporal context prototype
 - `final_project.ipynb`
   - course experiment notebook and execution record
 - `docs/SYNTHETIC_MEMORY_ABLATION.md`
@@ -140,7 +146,7 @@ Do not commit `.env` files, API keys, datasets or generated results.
 
 ## Running Tests
 
-The 150 offline tests cover the agent workflow (with fakes), profile
+The 181 offline tests cover the agent workflow (with fakes), profile
 statistics, quality thresholds, hybrid reference ranking, injection and
 leakage checks, conditional reflection, structured output, calibration,
 per-task records and paired bootstrap tests. They require neither the
@@ -254,7 +260,7 @@ Notes:
 - Prefer a GPU or high-RAM runtime: importing the framework loads TensorFlow,
   PyTorch and transformers, and the default CPU runtime can disconnect under
   that load. The environment setup itself is verified on the default runtime
-  (150 offline tests plus `--dry-run` pass).
+  (181 offline tests plus `--dry-run` pass).
 - Without `langchain`/`langchain-chroma` (step 3b), the optional framework
   `MemoryDILU` enhancement is skipped; this does **not** disable memory. The
   evaluation runner's `use_memory` configurations always use the dependency-free
@@ -266,8 +272,10 @@ Notes:
   `item.json`, `review.json` and `user.json` for that dataset.
 - Run 30-50 paired tasks for each of `yelp`, `amazon` and `goodreads` before
   spending the budget on a full run.
-- Use `--max-workers 1` when measuring ordered memory effects; parallel tasks
-  can race before an earlier same-user output is stored.
+- In the legacy Simulator path, `--max-workers 1` alone does not prove source-
+  order submission/return or temporal safety. The new temporal prototype controls
+  order itself and only exposes generated reviews from strictly earlier target
+  timestamps; same-time tasks do not exchange generated memory.
 - Keep `--max-workers` modest on Colab for general runs to avoid rate limits and
   memory pressure.
 - Write `--output-dir` to Drive so results survive runtime resets. The runner
@@ -288,14 +296,35 @@ Implemented and unit-tested offline:
 - per-task error records and a paired bootstrap test replacing the old
   relative-difference helper;
 - `memory_audit.py` for redacted repetition/leakage checks, optional exact
-  prompt-trace inspection, time-safe manifests, rating-bias intervals and
+  prompt-trace inspection, time-filtered manifests, rating-bias intervals and
   per-task candidate/recall/prompt-inclusion diagnostics;
 - per-run artifacts (`metadata.json`, per-task JSON, comparisons) and LLM
   usage counters.
 
 Honest limitations that remain:
 
-- calibration, user-cluster bootstrap and time-safe manifest construction have
+- the temporal context provider, four ablation contracts and time-filtered
+  manifest have synthetic/offline tests only. The real Simulator path is not
+  time-safe and is fail-closed for `--temporal-manifest` / `--temporal-ablation-mode`;
+- the temporal prototype is deliberately fixture-sized: it rejects review
+  sources above 64 MiB on disk or after decompression, or 100,000 parsed rows.
+  A known 4.22 GB review file is outside its supported input range; no large-data
+  usability is claimed. It streams records, keeps bounded task-relevant metadata, uses
+  per-user/item indexes rather than rescanning the full corpus per task, and
+  retains raw text only for selected context rows. Source bytes are parsed in a
+  constant number of passes, not once per task;
+- temporal manifest split boundaries keep identical target timestamps together;
+  multi-record task/groundtruth files require unique matching task indexes,
+  and the manifest includes a canonical parsed-record source fingerprint plus
+  context-row event-time/text-digest/rating fingerprints without embedding raw
+  reviews in the manifest;
+- `Trusted_History_Stats` is an offline prototype and requires data-owner
+  confirmation that the selected timestamps are event times; it uses only
+  provider-filtered source reviews, never current or other groundtruth labels;
+- the legacy `calculate_calibrated_metrics` uses a random task split and emits
+  `time_safe: false`; temporal calibration is a separate explicit-split helper
+  and is not connected to the Simulator runner;
+- user-cluster bootstrap and time-filtered manifest construction have
   synthetic/offline tests but still need validation on authorized real task
   assets; the focused live synthetic run validates memory wiring, not model
   quality;
@@ -322,10 +351,15 @@ limitations and next-step experiment protocol.
 ## Offline Memory and Leakage Audit
 
 The audit CLI does not import the simulator, call an LLM, or print user IDs,
-item IDs, comments, prompts or input paths. It streams JSON arrays/JSONL and
-retains only task-relevant review metadata in memory. `--prompt-file` accepts
-local prompt traces for exact-text checks; only counts are emitted. Prompt
-traces and datasets remain sensitive local data and must not be committed.
+item IDs, comments, prompts or input paths. The temporal manifest path streams
+JSON arrays/JSONL and retains only bounded, task-relevant metadata; before
+parsing it rejects source files above 64 MiB (including decompressed `.gz`
+content), and it stops at 100,000 records.
+These are safety gates for a small offline prototype, not capacity estimates.
+The separate `dataset` audit keeps its read-only aggregate-audit semantics.
+`--prompt-file` accepts local prompt traces for exact-text checks; only counts
+are emitted. Prompt traces and datasets remain sensitive local data and must
+not be committed.
 
 ```powershell
 # Repeated-user opportunity and source-corpus leakage evidence
@@ -335,21 +369,35 @@ py memory_audit.py dataset `
   --review-data Dataset/review.json `
   --output results/goodreads_memory_audit.json
 
-# Time-safe manifest: only strictly earlier, non-target real-review rows
+# Time-filtered manifest: only strictly earlier, non-target real-review rows.
+# Add the assertion flag only after a data owner confirms `date` is event time.
 py memory_audit.py manifest `
   --task-dir example/track1/goodreads/tasks `
   --groundtruth-dir example/track1/goodreads/groundtruth `
   --review-data Dataset/review.json `
   --train-ratio 0.6 --validation-ratio 0.2 `
+  --confirm-target-timestamp-semantics `
   --output results/temporal_manifest_goodreads.json
 ```
 
-The time-field semantics still require dataset-owner verification. If no
-target event time or uniquely matched target review row exists, the strict
-manifest marks that task ineligible rather than inventing chronology. The
-manifest is a tested offline construction artifact;
-it is not yet wired into the live Simulator adapter. See the report for
-privacy-safe run-artifact analysis and its pairing caveats.
+The assertion is not inferred from field names: `--confirm-target-timestamp-semantics`
+records only that the caller claims a data-owner review. Missing/ambiguous target
+rows, or target source rows without matching event times, are ineligible. A
+well-paired zero-eligible manifest is a valid *audit-only* output that exposes
+rejection reasons (`runtime_eligible: false`); missing sources, conflicting
+task/groundtruth identity, or unreliable alignment make the manifest CLI exit
+nonzero. `TemporalContextProvider` rejects zero tasks, empty review sources and
+zero eligible contexts. It revalidates a canonical fingerprint of every parsed
+review record and streams the source again while retaining only the selected
+raw context rows. Per-task visibility uses per-user/item indexes, not repeated
+full-corpus scans. Prompt provenance is recorded while the actual history and
+reference sections are rendered; a row with no uniquely tracked source index is
+reported as unknown rather than inferred from a text match elsewhere in the
+prompt. This remains limited to 64 MiB / 100,000-row synthetic or small offline
+fixtures and does not support the known 4.22 GB review asset. The external
+Simulator adapter remains unverified; requesting temporal mode from
+`comprehensive_evaluation.py` exits before creating results or importing the
+framework. See the audit report for strict prerequisites and remaining gates.
 
 ## Attribution
 

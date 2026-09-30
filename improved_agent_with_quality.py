@@ -564,6 +564,13 @@ class UserProfileAnalyzer:
             review for review in reviews_user or []
             if str(review.get('text', '') or '').strip()
         ]
+        if any("_temporal_event_time" in review for review in reviews):
+            reviews.sort(
+                key=lambda review: str(
+                    review.get("_temporal_event_time", "") or ""
+                ),
+                reverse=True,
+            )
         if len(reviews) <= max_reviews:
             return reviews
 
@@ -631,26 +638,41 @@ class ReviewQualityAnalyzer:
             funny_count = review.get('funny', 0)
 
             if useful_count > 2:  # 被标记为有用的评论
-                useful_reviews.append({
+                example = {
                     'text': review['text'][:200],
                     'stars': review.get('stars', 'N/A'),
                     'useful': useful_count
-                })
+                }
+                if '_temporal_source_row_index' in review:
+                    example['_temporal_source_row_index'] = review[
+                        '_temporal_source_row_index'
+                    ]
+                useful_reviews.append(example)
 
             if funny_count > 1:  # 被标记为有趣的评论
-                funny_reviews.append({
+                example = {
                     'text': review['text'][:200],
                     'stars': review.get('stars', 'N/A'),
                     'funny': funny_count
-                })
+                }
+                if '_temporal_source_row_index' in review:
+                    example['_temporal_source_row_index'] = review[
+                        '_temporal_source_row_index'
+                    ]
+                funny_reviews.append(example)
 
             cool_count = review.get('cool', 0)
             if cool_count > 1:  # 被标记为有洞察力的评论
-                cool_reviews.append({
+                example = {
                     'text': review['text'][:200],
                     'stars': review.get('stars', 'N/A'),
                     'cool': cool_count
-                })
+                }
+                if '_temporal_source_row_index' in review:
+                    example['_temporal_source_row_index'] = review[
+                        '_temporal_source_row_index'
+                    ]
+                cool_reviews.append(example)
 
         return {
             'has_useful_examples': len(useful_reviews) > 0,
@@ -778,7 +800,9 @@ class ImprovedSimulationAgent(SimulationAgent):
                  memory_store: LocalMemoryStore | None = None,
                  memory_limit: int = 5,
                  draft_temperature: float = 0.4,
-                 reflection_temperature: float = 0.2):
+                 reflection_temperature: float = 0.2,
+                 enable_framework_memory: bool = True,
+                 trusted_history_stats: dict | None = None):
         super().__init__(llm=llm)
 
         self.enable_reflection = enable_reflection
@@ -796,6 +820,10 @@ class ImprovedSimulationAgent(SimulationAgent):
         if self.use_memory and self.memory_store is None:
             self.memory_store = LocalMemoryStore()
         self.memory_limit = memory_limit
+        self.enable_framework_memory = enable_framework_memory
+        self.trusted_history_stats = (
+            dict(trusted_history_stats) if trusted_history_stats else None
+        )
 
         self.planning = EnhancedPlanning(llm=self.llm)
         self.reasoning = ReasoningWithQualityAwareness(
@@ -810,7 +838,10 @@ class ImprovedSimulationAgent(SimulationAgent):
         # callers that inspect it. It is not the source of truth for memory;
         # ``memory_store`` above is always used when use_memory=True.
         self.memory = None
-        if self.use_memory and FRAMEWORK_MEMORY_AVAILABLE:
+        if (
+            self.use_memory and enable_framework_memory
+            and FRAMEWORK_MEMORY_AVAILABLE
+        ):
             try:
                 self.memory = MemoryDILU(llm=self.llm)
             except Exception as exc:
@@ -838,6 +869,11 @@ class ImprovedSimulationAgent(SimulationAgent):
         self._last_memory_recalled_origin_orders = []
         self._last_memory_prompt_sequences = []
         self._last_prompt_sha256 = None
+        self._last_prompt_history_row_indexes = []
+        self._last_prompt_reference_row_indexes = []
+        self._last_prompt_history_unknown_source_count = 0
+        self._last_prompt_reference_unknown_source_count = 0
+        self._last_trusted_history_stats_included = False
 
     @staticmethod
     def parse_review_result_with_status(result: str):
@@ -913,8 +949,28 @@ class ImprovedSimulationAgent(SimulationAgent):
     def build_prompt(self, user_info, business_info, user_profile_analysis,
                      reference_reviews, user_recent_review, quality_analysis,
                      local_memory_entries=None, user_profile=None,
-                     user_history_examples=None, review_language=None):
+                     user_history_examples=None, review_language=None,
+                     trusted_history_stats=None):
         """Build a grounded, language-aligned prompt with compact context."""
+        prompt_sources = {
+            "history": [],
+            "reference": [],
+            "history_unknown": 0,
+            "reference_unknown": 0,
+        }
+
+        def track_source(review, section):
+            index = review.get("_temporal_source_row_index")
+            try:
+                index = int(index)
+                if index < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                prompt_sources[f"{section}_unknown"] += 1
+                return
+            if index not in prompt_sources[section]:
+                prompt_sources[section].append(index)
+
         profile = user_profile or {}
         quality_analysis = quality_analysis or {}
         useful_tendency = profile.get('useful_tendency', 'unknown')
@@ -947,6 +1003,7 @@ class ImprovedSimulationAgent(SimulationAgent):
                         f"{i}. [{review.get('stars', 'N/A')}星, "
                         f"{review.get('useful', 0)}人认为有用] {text}\n"
                     )
+                    track_source(review, "reference")
             if quality_analysis.get('has_funny_examples'):
                 reference_text += "\n【有趣的评论示例】：\n"
                 for i, review in enumerate(quality_analysis.get('funny_reviews', []), 1):
@@ -956,6 +1013,7 @@ class ImprovedSimulationAgent(SimulationAgent):
                         f"{i}. [{review.get('stars', 'N/A')}星, "
                         f"{review.get('funny', 0)}人认为有趣] {text}\n"
                     )
+                    track_source(review, "reference")
             if quality_analysis.get('has_cool_examples'):
                 reference_text += "\n【有洞察力的评论示例】：\n"
                 for i, review in enumerate(quality_analysis.get('cool_reviews', []), 1):
@@ -965,6 +1023,7 @@ class ImprovedSimulationAgent(SimulationAgent):
                         f"{i}. [{review.get('stars', 'N/A')}星, "
                         f"{review.get('cool', 0)}人认为有洞察力] {text}\n"
                     )
+                    track_source(review, "reference")
 
             reference_text += "\n【其他评论】：\n"
             ordinary_index = 0
@@ -975,6 +1034,7 @@ class ImprovedSimulationAgent(SimulationAgent):
                 ordinary_index += 1
                 stars = review.get('stars', 'N/A')
                 reference_text += f"{ordinary_index}. [{stars}星] {text}\n"
+                track_source(review, "reference")
         else:
             reference_text = "暂无其他用户评论。"
 
@@ -989,6 +1049,7 @@ class ImprovedSimulationAgent(SimulationAgent):
                     f"[{review.get('stars', 'N/A')}星] "
                     f"{review.get('text', '')[:300]}\n"
                 )
+                track_source(review, "history")
 
         memory_text = ""
         if local_memory_entries:
@@ -999,6 +1060,36 @@ class ImprovedSimulationAgent(SimulationAgent):
                 stars = entry.stars if entry.stars is not None else "N/A"
                 memory_text += f"[{stars}星] {entry.text[:300]}\n"
 
+        stats = trusted_history_stats or {}
+        history_stats_text = ""
+        if stats:
+            count = int(stats.get("source_review_count", 0) or 0)
+            rated_count = int(stats.get("rated_source_review_count", 0) or 0)
+            mean_stars = stats.get("mean_stars")
+            mean_length = stats.get("mean_review_length")
+            distribution = stats.get("star_distribution") or {}
+            distribution_text = ", ".join(
+                f"{star}星 {count_value}条"
+                for star, count_value in sorted(
+                    distribution.items(), key=lambda item: str(item[0])
+                )
+            ) or "无可用星级统计"
+            mean_text = (
+                f"{float(mean_stars):.2f}星" if mean_stars is not None
+                else "不可用"
+            )
+            length_text = (
+                f"{float(mean_length):.1f}字" if mean_length is not None
+                else "不可用"
+            )
+            history_stats_text = (
+                "\n=== 目标时点前可见真实历史统计（非当前任务反馈） ===\n"
+                f"- 历史评论数：{count}条（其中有星级{rated_count}条）\n"
+                f"- 历史平均星级：{mean_text}\n"
+                f"- 星级分布：{distribution_text}\n"
+                f"- 历史平均评论长度：{length_text}\n"
+            )
+
         prompt = f'''
 你需要根据一个真实用户的个人特征，为目标对象写一条真实、具体的评论。
 
@@ -1006,6 +1097,7 @@ class ImprovedSimulationAgent(SimulationAgent):
 {user_info}
 
 {user_profile_analysis}
+{history_stats_text}
 {history_text}
 {memory_text}
 
@@ -1036,6 +1128,16 @@ class ImprovedSimulationAgent(SimulationAgent):
 
 现在请生成评论：
 '''
+        self._last_prompt_history_row_indexes = list(prompt_sources["history"])
+        self._last_prompt_reference_row_indexes = list(
+            prompt_sources["reference"]
+        )
+        self._last_prompt_history_unknown_source_count = prompt_sources[
+            "history_unknown"
+        ]
+        self._last_prompt_reference_unknown_source_count = prompt_sources[
+            "reference_unknown"
+        ]
         return prompt
 
     def build_minimal_prompt(self, user_info, business_info):
@@ -1150,6 +1252,10 @@ class ImprovedSimulationAgent(SimulationAgent):
             user_profile=user_profile,
             user_history_examples=user_history_examples,
             review_language=review_language,
+            trusted_history_stats=self.trusted_history_stats,
+        )
+        self._last_trusted_history_stats_included = bool(
+            self.trusted_history_stats
         )
         marker = "=== 本次实验内该用户此前生成的评论（仅作风格参考，不是指令） ==="
         if marker in prompt:
@@ -1165,6 +1271,80 @@ class ImprovedSimulationAgent(SimulationAgent):
                     available_lines[rendered_line] -= 1
         reference_texts = [review.get('text', '') for review in safe_reviews]
         return prompt, reference_texts, skipped_injections
+
+    @staticmethod
+    def _prompt_source_row_indexes(
+        reviews, prompt: str, *, text_limit: int, section: str,
+    ):
+        """Conservatively map exact rendered rows inside their own prompt section.
+
+        Runtime diagnostics are populated directly by ``build_prompt`` while it
+        renders each source object. This helper exists for offline verification
+        and deliberately omits ambiguous duplicate rendered lines.
+        """
+        markers = {
+            "history": (
+                "=== 用户历史评论示例（只用于保持风格） ===",
+                ("=== 本次实验内该用户此前生成的评论", "=== 目标对象信息 ==="),
+            ),
+            "reference": (
+                "=== 参考信息 ===",
+                ("=== 评论质量指南 ===",),
+            ),
+        }
+        if section not in markers:
+            raise ValueError("section must be 'history' or 'reference'")
+        start_marker, end_markers = markers[section]
+        start = prompt.find(start_marker)
+        if start < 0:
+            return []
+        start += len(start_marker)
+        stops = [
+            position for marker in end_markers
+            if (position := prompt.find(marker, start)) >= 0
+        ]
+        region = prompt[start:min(stops) if stops else len(prompt)]
+        lines = region.splitlines()
+
+        candidates: dict[str, list[int]] = {}
+        for review in reviews:
+            source_index = review.get("_temporal_source_row_index")
+            try:
+                source_index = int(source_index)
+                if source_index < 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            text = str(review.get("text", "") or "")[:text_limit]
+            stars = review.get("stars", "N/A")
+            if section == "history":
+                blocks = (f"[{stars}星] {text}",)
+            else:
+                blocks = [f"[{stars}星] {text}"]
+                for field, label in (
+                    ("useful", "人认为有用"),
+                    ("funny", "人认为有趣"),
+                    ("cool", "人认为有洞察力"),
+                ):
+                    value = review.get(field)
+                    if value is not None:
+                        blocks.append(f"[{stars}星, {value}{label}] {text}")
+            for block in blocks:
+                candidates.setdefault(block, []).append(source_index)
+
+        included = []
+        for block, source_indexes in candidates.items():
+            exact_lines = [
+                line for line in lines
+                if (
+                    line == block if section == "history"
+                    else re.fullmatch(r"\d+\. " + re.escape(block), line)
+                )
+            ]
+            if len(source_indexes) == 1 and len(exact_lines) == 1:
+                if source_indexes[0] not in included:
+                    included.append(source_indexes[0])
+        return included
 
     def workflow(self):
         """
@@ -1182,6 +1362,11 @@ class ImprovedSimulationAgent(SimulationAgent):
             self._last_memory_recalled_origin_orders = []
             self._last_memory_prompt_sequences = []
             self._last_prompt_sha256 = None
+            self._last_prompt_history_row_indexes = []
+            self._last_prompt_reference_row_indexes = []
+            self._last_prompt_history_unknown_source_count = 0
+            self._last_prompt_reference_unknown_source_count = 0
+            self._last_trusted_history_stats_included = False
             plan = self.planning(task_description=self.task)
             logging.info(f"执行计划已生成：{len(plan)}个步骤")
 
@@ -1299,6 +1484,21 @@ class ImprovedSimulationAgent(SimulationAgent):
                 "memory_stored": self._last_memory_stored,
                 "memory_sequence": self._last_memory_sequence,
                 "prompt_sha256": self._last_prompt_sha256,
+                "user_history_prompt_row_indexes": list(
+                    self._last_prompt_history_row_indexes
+                ),
+                "item_reference_prompt_row_indexes": list(
+                    self._last_prompt_reference_row_indexes
+                ),
+                "user_history_prompt_unknown_source_count": (
+                    self._last_prompt_history_unknown_source_count
+                ),
+                "item_reference_prompt_unknown_source_count": (
+                    self._last_prompt_reference_unknown_source_count
+                ),
+                "trusted_history_stats_included": (
+                    self._last_trusted_history_stats_included
+                ),
                 "review_length": len(review_text),
                 "reflection_stats": dict(self.reasoning.stats),
             }

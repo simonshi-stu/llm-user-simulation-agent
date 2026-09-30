@@ -80,15 +80,16 @@ JSON 契约 + Pydantic 校验从根上消灭"自由文本解析"的脆弱性；�
 命中 memory 2/4 次，`No_Memory` 命中 0/4 次；这证明 wiring，不代表质量提升。
 用户提供的 2026-09-26 配对结果中，每个数据集有 400 个同索引任务，但实际 Memory
 召回数为 Yelp 0、Amazon 0、Goodreads 2；这些聚合差异不能说明 Memory 改善评分，
-而且逐任务文件当前不可访问。当前离线链路有 150 个测试、dry-run、无 API workflow
+而且逐任务文件当前不可访问。当前离线链路有 181 个测试、dry-run、无 API workflow
 与隐私安全审计。详情见 `docs/SYNTHETIC_MEMORY_ABLATION.md` 和
 `docs/MEMORY_EVALUATION_AUDIT_2026-09.md`。
 
 ### Q11 如果继续做，下一步是什么？
 ①先恢复获准数据与逐任务产物，核验重复用户、时间字段和实际 prompt 暴露；②用
-共享的时间安全任务清单比较 Full/No_Memory 与可信统计记忆，先做低成本离线复核；
-③在 validation 拟合校准、留 test 只评估一次；④评分准确性与评论风格分别报告；
-⑤任何在线扩样前单独确认 API 预算和模型。
+已实现的 framework-free `TemporalContextProvider` 在合成 fixture 验证上下文过滤与四个
+消融合同；③在证明真实 Simulator 的所有 user/item reviews、画像、prompt 与返回顺序都
+服从 provider 前，对真实入口 fail-closed；④时间校准只通过 manifest split 在 validation
+拟合、test 评估一次，旧随机切分不称 time-safe；⑤任何在线扩样前单独确认预算和模型。
 
 ### Q12 这个项目最大的工程教训？
 不要相信"能跑过"的自由文本解析。多行丢失和银行家舍入两个 bug 都会静默改变
@@ -101,15 +102,16 @@ JSON 契约 + Pydantic 校验从根上消灭"自由文本解析"的脆弱性；�
 | 提交数 | 不要提"183 次提交"，那是上游历史；个人贡献是 Agent、评测、Notebook、结果 |
 | 历史结果 | Yelp/Amazon/Goodreads 各 300 任务（RMSE 0.968/1.024/0.892），来自旧课程代码，本仓库未复现 |
 | 耗时 | 历史约 162 秒/300 任务，旧环境记录 |
-| 当前验证 | 150 个离线测试通过、ruff 无告警、Goodreads Full/No_Memory dry-run 通过；另有 4-task 真实 DeepSeek memory smoke run |
+| 当前验证 | 181 个离线测试通过、ruff 无告警、Goodreads Full/No_Memory dry-run 与多用户 temporal fake fixture 通过；4-task 真实 DeepSeek memory smoke run 是历史验证，不是本阶段时序集成 |
 | 消融名称 | 当前代码是 `Deterministic / Baseline / No_Context / Full / No_Reflection / No_Memory / Fewer_References`；历史 JSON 的 calibration 字段与当前代码不符，不要引用 |
 
 ## 5. 可现场演示
 
 ```bash
 .\.venv\Scripts\ruff.exe check .          # 秒级
-.\.venv\Scripts\python.exe -m pytest -q   # 150 passed
+.\.venv\Scripts\python.exe -m pytest -q   # 181 passed
 .\.venv\Scripts\python.exe comprehensive_evaluation.py --dry-run
+.\.venv\Scripts\python.exe -m pytest tests/test_temporal_context.py -q
 ```
 
 离线 workflow 演示：`tests/test_agent_workflow_offline.py` 用 FakeLLM 与

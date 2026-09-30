@@ -1,9 +1,16 @@
 """Synthetic, no-network tests for privacy-safe audit and temporal manifests."""
 
 import json
+import gzip
 from pathlib import Path
+import subprocess
+import sys
 
+import memory_audit
+import pytest
 from memory_audit import (
+    TemporalManifestInputError,
+    _load_temporal_review_index,
     audit_dataset,
     audit_run_artifacts,
     build_temporal_manifest,
@@ -108,6 +115,178 @@ def test_manifest_excludes_heldout_targets_and_future_reviews(tmp_path):
     assert "private target review one" not in rendered
 
 
+def test_manifest_cli_pairing_conflict_exits_nonzero_without_private_details(
+    tmp_path,
+):
+    task_dir = tmp_path / "tasks"
+    truth_dir = tmp_path / "groundtruth"
+    write_json(task_dir / "0.json", {
+        "user_id": "private-task-user", "item_id": "private-item",
+        "timestamp": "2024-01-01T00:00:00Z",
+    })
+    write_json(truth_dir / "0.json", {
+        "user_id": "private-label-user", "item_id": "private-item",
+        "timestamp": "2024-01-01T00:00:00Z", "stars": 4,
+    })
+    reviews = tmp_path / "reviews.json"
+    write_json(reviews, [])
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "memory_audit.py"),
+            "manifest",
+            "--task-dir", str(task_dir),
+            "--groundtruth-dir", str(truth_dir),
+            "--review-data", str(reviews),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "task_groundtruth_pairing_unreliable" in completed.stderr
+    assert "private-task-user" not in completed.stderr
+    assert "private-label-user" not in completed.stderr
+    assert str(tmp_path) not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        ("task_directory_missing", "task_or_groundtruth_source_missing"),
+        ("review_source_missing", "review_source_missing"),
+        ("multi_record_alignment", "task_groundtruth_pairing_unreliable"),
+    ],
+)
+def test_manifest_cli_fails_closed_on_missing_or_unreliable_sources(
+    tmp_path, failure, expected_code,
+):
+    task_dir = tmp_path / "tasks"
+    truth_dir = tmp_path / "groundtruth"
+    review_file = tmp_path / "reviews.json"
+    if failure == "task_directory_missing":
+        write_json(truth_dir / "0.json", {"stars": 4})
+        write_json(review_file, [])
+    elif failure == "review_source_missing":
+        write_json(task_dir / "0.json", {"user_id": "u", "item_id": "i"})
+        write_json(truth_dir / "0.json", {"stars": 4})
+    else:
+        write_json(task_dir / "batch.json", [
+            {"user_id": "u", "item_id": "i0"},
+            {"user_id": "u", "item_id": "i1"},
+        ])
+        write_json(truth_dir / "batch.json", [{"stars": 4}, {"stars": 5}])
+        write_json(review_file, [])
+    review_argument = (
+        tmp_path / "missing-reviews.json"
+        if failure == "review_source_missing" else review_file
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "memory_audit.py"),
+            "manifest",
+            "--task-dir", str(task_dir),
+            "--groundtruth-dir", str(truth_dir),
+            "--review-data", str(review_argument),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert expected_code in completed.stderr
+    assert str(tmp_path) not in completed.stderr
+
+
+def test_zero_eligible_manifest_is_audit_only_not_a_provider_input(
+    tmp_path, capsys,
+):
+    task_dir = tmp_path / "tasks"
+    truth_dir = tmp_path / "groundtruth"
+    write_json(task_dir / "0.json", {"user_id": "u", "item_id": "i"})
+    write_json(truth_dir / "0.json", {
+        "review_id": "missing-target", "timestamp": "2024-01-02T00:00:00Z",
+        "stars": 4,
+    })
+    reviews = tmp_path / "reviews.json"
+    write_json(reviews, [{
+        "review_id": "old", "user_id": "u", "item_id": "old-item",
+        "date": "2024-01-01T00:00:00Z", "stars": 4, "text": "old review",
+    }])
+
+    result = memory_audit.main([
+        "manifest", "--task-dir", str(task_dir), "--groundtruth-dir",
+        str(truth_dir), "--review-data", str(reviews),
+    ])
+    rendered = capsys.readouterr().out
+    audit = json.loads(rendered)
+
+    assert result == 0
+    assert audit["eligible_task_count"] == 0
+    assert audit["manifest_audit_status"] == "audit_only_no_eligible_tasks"
+    assert audit["runtime_eligible"] is False
+    assert audit["runtime_rejection_reasons"] == ["no_eligible_tasks"]
+
+
+def test_temporal_source_byte_limit_is_checked_before_parsing(tmp_path, monkeypatch):
+    source = tmp_path / "reviews.json"
+    source.write_text("not parsed", encoding="utf-8")
+    monkeypatch.setattr(memory_audit, "TEMPORAL_MAX_REVIEW_SOURCE_BYTES", 2)
+
+    def parser_must_not_run(_source):
+        raise AssertionError("oversized source was parsed before preflight")
+
+    monkeypatch.setattr(memory_audit, "iter_records", parser_must_not_run)
+    with pytest.raises(TemporalManifestInputError) as caught:
+        _load_temporal_review_index(
+            [source], relevant_users=set(), relevant_items=set()
+        )
+    assert caught.value.code == "review_source_byte_limit_exceeded"
+
+
+def test_compressed_temporal_source_is_bounded_by_decoded_size_before_parsing(
+    tmp_path, monkeypatch,
+):
+    source = tmp_path / "reviews.json.gz"
+    with gzip.open(source, "wb") as handle:
+        handle.write(b" " * 4096)
+    assert source.stat().st_size < 1024
+    monkeypatch.setattr(memory_audit, "TEMPORAL_MAX_REVIEW_SOURCE_BYTES", 1024)
+
+    def parser_must_not_run(_source):
+        raise AssertionError("oversized decoded source was parsed")
+
+    monkeypatch.setattr(memory_audit, "iter_records", parser_must_not_run)
+    with pytest.raises(TemporalManifestInputError) as caught:
+        _load_temporal_review_index(
+            [source], relevant_users=set(), relevant_items=set()
+        )
+    assert caught.value.code == "review_source_decoded_byte_limit_exceeded"
+
+
+def test_temporal_source_record_limit_stops_bounded_metadata_retention(
+    tmp_path, monkeypatch,
+):
+    source = tmp_path / "reviews.json"
+    write_json(source, [
+        {"user_id": "u", "item_id": "i", "text": "one"},
+        {"user_id": "u", "item_id": "i", "text": "two"},
+    ])
+    monkeypatch.setattr(memory_audit, "TEMPORAL_MAX_REVIEW_ROWS", 1)
+
+    with pytest.raises(TemporalManifestInputError) as caught:
+        _load_temporal_review_index(
+            [source], relevant_users={"u"}, relevant_items={"i"}
+        )
+    assert caught.value.code == "review_source_record_limit_exceeded"
+
+
 def test_missing_time_marks_rows_ineligible_instead_of_guessing(tmp_path):
     task_dir = tmp_path / "tasks"
     truth_dir = tmp_path / "groundtruth"
@@ -141,6 +320,30 @@ def test_unmatched_target_is_not_eligible_for_strict_temporal_manifest(tmp_path)
 
     assert result["eligible_task_count"] == 0
     assert result["ineligible_reasons"]["target_review_not_uniquely_matched"] == 1
+
+
+def test_target_row_without_its_own_event_time_is_not_temporally_eligible(tmp_path):
+    task_dir = tmp_path / "tasks"
+    truth_dir = tmp_path / "groundtruth"
+    write_json(task_dir / "task_0.json", {
+        "user_id": "u", "item_id": "i",
+        "timestamp": "2024-01-02T00:00:00Z",
+    })
+    write_json(truth_dir / "groundtruth_0.json", {
+        "review_id": "target", "stars": 4,
+        "timestamp": "2024-01-02T00:00:00Z", "review": "target text",
+    })
+    review_file = tmp_path / "reviews.json"
+    write_json(review_file, [{
+        "review_id": "target", "user_id": "u", "item_id": "i",
+        "stars": 4, "text": "target text",
+    }])
+
+    result = build_temporal_manifest(task_dir, truth_dir, [review_file])
+
+    assert result["eligible_task_count"] == 0
+    assert result["ineligible_reasons"]["matched_target_review_time_unverified"] == 1
+    assert result["target_timestamp_semantics_verified"] is False
 
 
 def test_prompt_trace_scan_confirms_exact_target_and_future_text_without_output(

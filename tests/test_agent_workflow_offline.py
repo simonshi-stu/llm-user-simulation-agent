@@ -62,6 +62,121 @@ def test_prompt_contains_profile_and_reference_sections():
     assert "参考信息" in prompt
 
 
+def test_prompt_provenance_checks_the_matching_rendered_section():
+    llm = FakeLLM(['{"stars": 4.0, "review": "A grounded synthetic review."}'])
+    agent = build_agent(llm)
+    shared_text = "SHARED REVIEW TEXT"
+    history_row = {
+        "stars": 4, "text": shared_text,
+        "_temporal_source_row_index": 7,
+    }
+    prompt = agent.build_prompt(
+        user_info=f"Profile note containing {shared_text}",
+        business_info=f"Synthetic target mentioning {shared_text}",
+        user_profile_analysis="Synthetic profile analysis",
+        reference_reviews=[],
+        user_recent_review=history_row,
+        quality_analysis={
+            "has_useful_examples": False,
+            "has_funny_examples": False,
+            "has_cool_examples": False,
+        },
+        user_history_examples=[history_row],
+        review_language="English",
+    )
+
+    assert agent._prompt_source_row_indexes(
+        [history_row], prompt, text_limit=300, section="history"
+    ) == [7]
+    assert agent._prompt_source_row_indexes(
+        [history_row], prompt, text_limit=200, section="reference"
+    ) == []
+    assert agent._last_prompt_history_row_indexes == [7]
+    assert agent._last_prompt_reference_row_indexes == []
+    assert "暂无其他用户评论" in prompt
+
+
+def test_workflow_tracks_history_reference_duplicate_and_quality_rows_separately():
+    llm = FakeLLM(['{"stars": 4.0, "review": "A grounded synthetic review."}'])
+    agent = build_agent(llm)
+    shared_text = "SHARED REVIEW TEXT " * 15
+    history_row = {
+        "stars": 4, "text": shared_text,
+        "_temporal_source_row_index": 7,
+    }
+    reference_row = {
+        "stars": 4, "text": shared_text, "useful": 5,
+        "_temporal_source_row_index": 8,
+    }
+    agent.interaction_tool.user_reviews = [history_row]
+    agent.interaction_tool.item_reviews = [reference_row]
+
+    agent.workflow()
+
+    prompt = llm.calls[0]["messages"][0]["content"]
+    diagnostics = agent.last_diagnostics
+    assert diagnostics["user_history_prompt_row_indexes"] == [7]
+    assert diagnostics["item_reference_prompt_row_indexes"] == [8]
+    assert diagnostics["user_history_prompt_unknown_source_count"] == 0
+    assert diagnostics["item_reference_prompt_unknown_source_count"] == 0
+    assert agent._prompt_source_row_indexes(
+        [history_row], prompt, text_limit=300, section="history"
+    ) == [7]
+    assert agent._prompt_source_row_indexes(
+        [reference_row], prompt, text_limit=200, section="reference"
+    ) == [8]
+    assert "【信息价值高的评论示例】" in prompt
+
+
+def test_prompt_provenance_respects_rendered_truncation_and_ambiguity():
+    agent = build_agent(FakeLLM([]))
+    history_row = {
+        "stars": 5, "text": "H" * 350,
+        "_temporal_source_row_index": 11,
+    }
+    reference_row = {
+        "stars": 4, "text": "R" * 250,
+        "_temporal_source_row_index": 12,
+    }
+    prompt = agent.build_prompt(
+        user_info="",
+        business_info="",
+        user_profile_analysis="",
+        reference_reviews=[reference_row],
+        user_recent_review=history_row,
+        quality_analysis={
+            "has_useful_examples": False,
+            "has_funny_examples": False,
+            "has_cool_examples": False,
+        },
+        user_history_examples=[history_row],
+        review_language="English",
+    )
+
+    assert "H" * 300 in prompt and "H" * 301 not in prompt
+    assert "R" * 200 in prompt and "R" * 201 not in prompt
+    assert agent._prompt_source_row_indexes(
+        [history_row], prompt, text_limit=300, section="history"
+    ) == [11]
+    assert agent._prompt_source_row_indexes(
+        [history_row], prompt, text_limit=301, section="history"
+    ) == []
+    assert agent._prompt_source_row_indexes(
+        [reference_row], prompt, text_limit=200, section="reference"
+    ) == [12]
+    assert agent._prompt_source_row_indexes(
+        [reference_row], prompt, text_limit=201, section="reference"
+    ) == []
+
+    duplicate_candidates = [
+        {**history_row, "_temporal_source_row_index": 13},
+        {**history_row, "_temporal_source_row_index": 14},
+    ]
+    assert agent._prompt_source_row_indexes(
+        duplicate_candidates, prompt, text_limit=300, section="history"
+    ) == []
+
+
 def test_prompt_uses_compact_profile_and_grounded_language_instruction():
     llm = FakeLLM(["stars: 4.0\nreview: Coffee and service were both reliable."])
     agent = build_agent(llm)

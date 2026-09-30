@@ -20,11 +20,12 @@ llm-user-simulation-agent/
 ├─ local_memory.py                   # 单次实验内、按 user_id 隔离的本地 Memory
 ├─ comprehensive_evaluation.py      # 实验运行器 + 指标 + 配对 bootstrap + CLI
 ├─ memory_audit.py                    # 无 LLM 数据泄漏/重复率审计 + 时间清单
+├─ temporal_context.py                # 清单重建校验 + 单任务离线时序消融执行器
 ├─ score_calibration.py             # 评分校准（bias / linear）
 ├─ inspect_agent_output.py          # 单任务人工观察工具（未 CLI 化）
 ├─ final_project.ipynb              # 课程实验 Notebook（历史执行记录，勿改）
 ├─ ablation_results_*_clean.json    # Yelp / Amazon / Goodreads 历史结果快照
-├─ tests/                           # 150 个离线测试（不装框架、不联网）
+├─ tests/                           # 181 个离线测试（不装框架、不联网）
 │  ├─ fakes.py                      # FakeLLM / FakeInteractionTool / make_review
 │  ├─ test_agent_workflow_offline.py# workflow 端到端
 │  ├─ test_agent_offline.py         # 画像、质量阈值、参考选择、解析与归一
@@ -36,7 +37,8 @@ llm-user-simulation-agent/
 │  ├─ test_evaluation_config.py     # CLI 默认值、实验列表、dry-run
 │  ├─ test_llm_client.py            # seed/JSON payload、usage 统计
 │  ├─ test_synthetic_memory.py      # 重复用户 Memory 消融
-│  └─ test_memory_audit.py          # 隐私审计、prompt 检查、时间安全清单
+│  ├─ test_memory_audit.py          # 隐私审计、prompt 检查、时间清单
+│  └─ test_temporal_context.py      # 多用户时间 fixture、四消融、fail-closed adapter
 ├─ docs/
 │  ├─ PROJECT_SCOPE.md              # 归属边界与扩展路线图
 │  ├─ DEVLOG.md                     # 逐步开发记录（学习/讲解材料）
@@ -51,6 +53,10 @@ llm-user-simulation-agent/
 ├─ .github/workflows/ci.yml         # CI：ruff + pytest + dry-run smoke
 └─ .env.example / README.md / LICENSE / THIRD_PARTY_NOTICES.md
 ```
+
+此图是兼容旧路径。真实 `websocietysimulator` 的数据过滤、画像聚合、任务顺序
+尚未验证，因此不能称为 time-safe。严格离线原型由 `TemporalContextProvider` 直接
+构造单任务 `TemporalInteractionTool`，并在普通串行循环中显式掌控 manifest 顺序。
 
 ## 3. 单任务数据流（Agent）
 
@@ -139,6 +145,10 @@ parse_review_result_with_status
 - `memory_store` 只保存本次运行生成的评论，按 `user_id` 隔离；`ExperimentRunner`
   为每个启用 memory 的实验配置创建新的 store，不写磁盘也不保存 groundtruth。
 - `MemoryDILU` 只能作为可选框架增强；缺少它时不会关闭 `LocalMemoryStore`。
+- 时间原型会关闭 `MemoryDILU`；`Generated_Review_Memory` 只写 Agent 自身输出，
+  不读取或写入 groundtruth。
+- `trusted_history_stats` 只由已过滤的真实 user-history rows 生成；记录来源条数、
+  最大事件时间、row indexes 与摘要哈希，仅把统计值加入 prompt。该路径仍是离线原型。
 - `parse_review_result_with_status(result)`：返回 `(stars, review, used_fallback)`。
 - `parse_review_result(result)`：兼容旧调用，返回 `(stars, review)`。
 
@@ -188,7 +198,9 @@ parse_review_result_with_status
   `No_Reflection`、`No_Memory`、`Fewer_References`。
 - `build_parser()`：`--data-dir/--task-set/--num-tasks/--max-workers/--seed/
   --api-key/--chat-model/--base-url/--output-dir/--experiment/--dry-run`，以及
-  temperature、JSON mode 和 held-out calibration 参数。
+  temperature、JSON mode 和 held-out calibration 参数。`--temporal-manifest` /
+  `--temporal-ablation-mode` 在 API 检查、Simulator 导入和目录创建前 fail-closed，
+  直到真实 tool/profile/prompt/order 契约通过验证。
 - `main(argv=None)`：返回退出码；dry-run 不导入框架、不调 API、不建目录。
 
 ### 4.3 memory_audit.py
@@ -197,25 +209,50 @@ parse_review_result_with_status
   本地 review 文件以及 prompt trace。数组/JSONL 增量解析；仅输出聚合计数，不输出
   原文、ID、prompt 或输入路径。源数据匹配不等于实际 prompt 暴露。
 - `manifest`：按目标时间严格筛选用户历史/目标物品参考，排除全部可匹配的目标交互
-  和同时间/未来评论，生成共享的时间排序和 train/validation/test 清单。目标源评论
-  无法唯一匹配、没有可信时间或用户/物品 key 的任务会标记不合格。时间字段语义仍需
-  数据拥有者确认。
+  和同时间/未来评论；相同目标时点的任务属于不可拆分 split 组，组内不算先后复现。
+  生成共享的时间排序和 train/validation/test 清单。目标源评论
+  无法唯一匹配、目标源行缺少事件时间或用户/物品 key 的任务会标记不合格。v2 默认
+  `target_timestamp_semantics_verified=false`；只有数据拥有者确认事件时间语义后，调用方
+  才可显式设置 caller assertion。该字段不是工具自动验证的事实；无法匹配且缺少 user/item
+  key 时，会关闭对应的全部 review-derived context 通道。
 - `run`：对 Full/No_Memory 逐任务文件区分候选/召回/prompt 纳入，并分析数值误差；
   默认不把 source index、执行序和记录位置互相推定。只有核验相同任务 index 或
   Simulator 输出顺序后才显式开启配对选项。
 - 审计器不调用模型。输出 JSON 仍应存入被忽略的本地 results 目录；输入数据与
   prompt trace 不应提交。
 
-### 4.4 score_calibration.py（T8）
+### 4.4 temporal_context.py（独立离线原型）
+
+- `TemporalContextProvider` 要求 schema v2、显式 caller assertion、自然文件名精确配对；
+  多记录文件还要求两侧唯一匹配的显式 task index。它读取当前 tasks/groundtruth/review
+  sources 并重建 manifest，完整比较任务顺序、上下文 row indexes 与内容指纹。随后重新读取
+  原始评论并逐行核对时点、目标 source row/ID/text、目标 user-time
+  与 item-time 排除。Manifest 里的 indexes/hash 不是用户可见上下文或时间语义凭证。
+- `TemporalInteractionTool` 只暴露当前 user 的合格历史、当前 item 的合格外部参考和最小
+  静态字段；不暴露全量 store、聚合画像或 groundtruth。框架未接入。
+- 四个合同：`No_Memory`（共同历史/参考，无跨任务记忆）、`Generated_Review_Memory`
+  （额外注入此前 Agent 自生成评论）、`Trusted_History_Stats`（额外注入当前时点可见的
+  真实历史统计）、`Combined`。`run_temporal_ablation_suite` 显式顺序执行并断言各条件
+  task index、execution order、context digest 完全一致；诊断记录 prompt 实际包含的源行索引。
+- 生成评论 memory 仅读取严格早于当前 target timestamp 的 Agent 输出；同时间任务即使被
+  source index 排在前面，也不会互相形成因果 Memory。
+- 统计只取严格过滤后的真实历史；真实 target 与所有唯一/歧义目标候选均不会进入它。无数据
+  拥有者语义确认时，不能将其称为可信生产 memory。
+
+### 4.5 score_calibration.py（T8）
 
 - `ScoreCalibrator(method="bias"|"linear")`：`fit` / `calibrate` / `calibrate_many` /
   `to_dict` / `from_dict`；输出自动归一 + clamp。
 - `split_pairs(predictions, actuals, validation_ratio, seed)`：确定性切分。
+- 旧 `calculate_calibrated_metrics()` 仍使用随机 task split，明确返回
+  `calibration_split_protocol=random_task_split_not_temporal`、`time_safe=false`；不能用于
+  时间安全结果。
 - `rmse(predictions, actuals)`：便于比较校准前后。
 - `evaluate_temporal_calibration(records, split_by_index, method)`：只在显式
-  validation split 拟合，train 不参与拟合，test 只做最终报告；尚未接入真实 Simulator run。
+  validation split 拟合，train 不参与拟合，test 只做最终报告；检查 split 名和非有限值，
+  尚未接入真实 Simulator run。
 
-### 4.5 tests/
+### 4.6 tests/
 
 - `fakes.py` 提供 `FakeLLM`（队列响应、记录调用）与 `FakeInteractionTool`。
 - 全部测试满足两个约束：不 import `websocietysimulator`（缺失时走 stub）、不联网。
@@ -248,6 +285,7 @@ py -m venv .venv
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\ruff.exe check .
 .\.venv\Scripts\python.exe comprehensive_evaluation.py --dry-run
+.\.venv\Scripts\python.exe -m pytest tests/test_temporal_context.py -q
 
 # 真实实验（需要 API key 与数据集资产）
 $env:DEEPSEEK_API_KEY = "..."
@@ -272,7 +310,7 @@ print(raw, calibrated)
 - 红-绿流程：先写回归测试证明 bug，再修代码（`docs/DEVLOG.md` 有完整记录）。
 - 离线原则：LLM 与交互工具都用 fake；`--dry-run` 走 subprocess 做无网络 smoke。
 - `pytest.ini` 把 basetemp 指到项目内 `.pytest_tmp/`，避免写系统临时目录。
-- CI 在每次 push 跑 lint + 150 个测试 + dry-run。
+- CI 在每次 push 跑 lint + 181 个测试 + dry-run。
 
 ## 8. 已修复的真实 Bug
 

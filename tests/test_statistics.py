@@ -46,6 +46,13 @@ class TestPerTaskRecords:
         assert records[0]["squared_error"] == 1.0
         assert records[1]["error"] == 0.0
 
+    def test_record_builder_rejects_silent_positional_truncation(self):
+        with pytest.raises(ValueError, match="equal lengths"):
+            build_per_task_records(
+                [{"stars": 4.0}],
+                [{"stars": 4.0}, {"stars": 5.0}],
+            )
+
     def test_missing_prediction_is_marked(self):
         records = build_per_task_records([None], [{"stars": 3.0}])
         assert records[0]["predicted"] is None
@@ -63,6 +70,8 @@ class TestPerTaskRecords:
         )
 
         assert metrics["calibration_method"] == "bias"
+        assert metrics["calibration_split_protocol"] == "random_task_split_not_temporal"
+        assert metrics["time_safe"] is False
         assert metrics["calibration_train_size"] == 2
         assert metrics["calibration_validation_size"] == 2
         assert "calibrated_rmse" in metrics

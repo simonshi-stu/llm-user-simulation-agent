@@ -173,7 +173,16 @@ def extract_prediction(output) -> float:
 
 def build_per_task_records(outputs: List[Dict],
                            groundtruths: List[Dict]) -> List[Dict]:
-    """Pair predictions with ground truth into per-task error records."""
+    """Pair same-position predictions/labels, rejecting silent truncation.
+
+    This legacy helper still cannot prove that the Simulator returned source
+    task order; ``index`` is only a return-position index.
+    """
+    if len(outputs) != len(groundtruths):
+        raise ValueError(
+            "outputs and groundtruths must have equal lengths; refusing "
+            "silent positional truncation"
+        )
     records = []
     for index, (output, groundtruth) in enumerate(zip(outputs, groundtruths)):
         if not groundtruth or "stars" not in groundtruth:
@@ -240,20 +249,30 @@ def calculate_additional_metrics(outputs: List[Dict], groundtruths: List[Dict]) 
 def calculate_calibrated_metrics(records: List[Dict], method: str = "none",
                                  validation_ratio: float = 0.5,
                                  seed: int = 0) -> Dict:
-    """Fit calibration on one split and report only the held-out split."""
+    """Legacy random task split calibration; this is not time-safe.
+
+    Temporal evaluation must use ``score_calibration.evaluate_temporal_calibration``
+    with an explicit task-index-to-split mapping from a verified manifest.
+    """
     if method == "none":
         return {}
     if not 0.0 < validation_ratio < 1.0:
         raise ValueError("validation_ratio must be between 0 and 1")
 
-    valid = [
-        record for record in records
-        if record.get("predicted") is not None
-        and record.get("actual") is not None
-    ]
+    valid = []
+    for record in records:
+        try:
+            predicted = float(record["predicted"])
+            actual = float(record["actual"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if np.isfinite(predicted) and np.isfinite(actual):
+            valid.append({**record, "predicted": predicted, "actual": actual})
     if len(valid) < 2:
         return {
             "calibration_method": method,
+            "calibration_split_protocol": "random_task_split_not_temporal",
+            "time_safe": False,
             "calibration_warning": "fewer than two valid predictions",
         }
 
@@ -271,6 +290,8 @@ def calculate_calibrated_metrics(records: List[Dict], method: str = "none",
 
     return {
         "calibration_method": method,
+        "calibration_split_protocol": "random_task_split_not_temporal",
+        "time_safe": False,
         "calibration_train_size": len(train[0]),
         "calibration_validation_size": len(calibrated_actuals),
         "calibrated_rmse": float(np.sqrt(np.mean(np.square(errors)))),
@@ -638,6 +659,12 @@ class ExperimentRunner:
                 seed=self.seed or 0,
             )
         )
+        eval_results["temporal_safety"] = (
+            "not_verified_legacy_simulator_context"
+        )
+        eval_results["per_task_pairing_protocol"] = (
+            "same_return_position_only_source_task_order_unverified"
+        )
 
         if evaluation_warning:
             eval_results["evaluation_warning"] = evaluation_warning
@@ -778,6 +805,14 @@ class ExperimentRunner:
             "json_mode": self.json_mode,
             "calibration_method": self.calibration_method,
             "calibration_validation_ratio": self.calibration_validation_ratio,
+            "calibration_split_protocol": (
+                "random_task_split_not_temporal"
+                if self.calibration_method != "none" else "none"
+            ),
+            "temporal_safety": "not_verified_legacy_simulator_context",
+            "per_task_pairing_protocol": (
+                "same_return_position_only_source_task_order_unverified"
+            ),
             "task_dir": self.task_dir,
             "groundtruth_dir": self.groundtruth_dir,
             "output_dir": self.output_dir,
@@ -1084,7 +1119,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--calibration-method", choices=("none", "bias", "linear"),
         default="none",
-        help="Leakage-safe held-out score calibration method."
+        help=("Legacy random-task held-out calibration (not time-safe); "
+              "default: none."),
     )
     parser.add_argument(
         "--calibration-validation-ratio", type=float, default=0.5,
@@ -1097,6 +1133,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--experiment", nargs="*", default=None,
         help="Experiment names to run (default: all)."
+    )
+    parser.add_argument(
+        "--temporal-manifest", default=None,
+        help=("Request temporal execution. The real Simulator adapter is "
+              "currently fail-closed and will refuse this option."),
+    )
+    parser.add_argument(
+        "--temporal-ablation-mode",
+        choices=(
+            "No_Memory", "Generated_Review_Memory",
+            "Trusted_History_Stats", "Combined",
+        ),
+        default=None,
+        help=("Temporal prototype mode. Not accepted by the real Simulator "
+              "runner until all context/tool paths are verified."),
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -1143,6 +1194,14 @@ def main(argv=None) -> int:
             )
         selected = set(args.experiment)
         experiments = [c for c in experiments if c.name in selected]
+
+    if args.temporal_manifest or args.temporal_ablation_mode:
+        parser.error(
+            "time-safe execution through websocietysimulator is disabled: "
+            "the framework's get_reviews/profile/prompt/order contracts are "
+            "unverified. Use TemporalContextProvider and the framework-free "
+            "single-task runner; do not use a manifest as context by itself."
+        )
 
     api_key = args.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
 

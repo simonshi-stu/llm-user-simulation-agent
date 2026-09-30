@@ -79,6 +79,31 @@ def test_missing_api_key_returns_error(monkeypatch, capsys, tmp_path):
     assert not output_dir.exists()
 
 
+@pytest.mark.parametrize(
+    "temporal_args",
+    [
+        ["--temporal-manifest", "local-manifest.json"],
+        ["--temporal-ablation-mode", "Trusted_History_Stats"],
+    ],
+)
+def test_real_simulator_temporal_entry_fails_closed(
+    temporal_args, capsys, tmp_path, monkeypatch
+):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    output_dir = tmp_path / "must-not-be-created"
+    with pytest.raises(SystemExit) as excinfo:
+        main([
+            *temporal_args,
+            "--output-dir", str(output_dir),
+        ])
+
+    assert excinfo.value.code == 2
+    assert "time-safe execution through websocietysimulator is disabled" in (
+        capsys.readouterr().err
+    )
+    assert not output_dir.exists()
+
+
 def test_cli_dry_run_runs_as_script():
     result = subprocess.run(
         [
