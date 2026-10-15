@@ -1,5 +1,69 @@
 # LLM User Simulation Agent
 
+## 项目定位与当前状态（2026-10-14）
+
+**项目 A：根据安全可见的用户历史，模拟个性化评分与评论。**
+
+独立的[评测与诊断项目 B](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)负责评测这些预测，不再生成另一套评论。两项目通过版本化结果契约协作；阶段①结果契约、离线 fake 导出与 B 独立验证入口已在本地独立验收，应用代码尚未发布。
+
+```text
+真实历史 → 时间安全上下文 → 画像/参考筛选 → 模拟评分与评论
+                                       → 结果与运行诊断 → 项目 B
+隔离的目标标签 ──────────────────────────────────────→ 末端评分器
+```
+
+**发布说明：本地升级代码、离线验收记录与 GitHub 已发布版本不是同一状态。** 未提交模块不代表远端 clone 后可运行；README 更新不等于代码发布。下方原课程与历史实现说明保留，不合并不同实验的成绩。
+
+| 能力 | 已实现／已验证 | 尚未证明 |
+| --- | --- | --- |
+| AgentSociety 课程生成链路 | 保留画像、参考筛选、条件反思/修复和课程记录 | 当前真实 Simulator 的时序及返回顺序契约未核验 |
+| Amazon 小数据闭环 | 本地核验乐器 10,261 条评论、400 个目标及四种统计基线 | 基线成绩不是 LLM 成绩 |
+| 可靠生成路径 | 四态结果、实际渲染引用、有限修复、预算与成功写入有离线测试 | 引用正确不等于事实正确；真实模型行为待测 |
+| Memory | 运行内、按用户隔离；可靠路径按 UTC 日召回更早生成结果 | 不跨进程持久化，不是用户真实反馈，不证明有收益 |
+| Demo | 合成数据/fake-only；浏览器交互与移动端有独立验收记录 | 无真实 LLM 准确率、成本或延迟结论 |
+
+当前定位是**有可靠性工程的用户模拟原型**，不是已经证明个性化效果的生产系统，也不是自主多 Agent。
+
+### 怎么衡量，而不是凭一条示例判断
+
+- **评分**：RMSE、MAE、±1 星准确率、预测减实际的平均有符号偏差；对比固定全局/用户/物品/组合基线。
+- **评论**：相对安全历史的长度偏差、参考字符 n-gram 重合率；另做盲评的用户风格匹配、评分—评论一致性。
+- **可靠性**：首次格式通过率、修复请求/实际调用/成功数、最终成功/降级/拒绝/失败比例、调用与耗时。
+- **Memory**：同任务、同顺序、同设置比较有/无记忆；记录真正入 prompt 的条目及用户覆盖，按用户做配对 bootstrap。
+- 分开报告成功预测、带统计回退的系统结果和全请求覆盖率；不能删掉失败任务后宣称整体改善。
+
+完整实测汇总仍待补齐。旧课程汇总不能当新版成绩，fake 格式通过不能当真实准确率。
+
+### 阶段①本地复现（代码尚未发布）
+
+在本地 A 仓库根目录运行，使用已有 Python 环境，不安装新服务：
+
+```powershell
+# 使用你已配置的 Python；先检查计划，不写文件
+python -m user_simulator_project --dry-run
+# 输出目录必须全新；评论等产物留在 ignored results/，不要上传
+python -m user_simulator_project --synthetic --max-tasks 3 --output-dir results/stage1_my_demo
+```
+
+再在 B 仓库根目录执行 `python -m amazon_eval_agent validate --input "<A 的绝对路径>/results/stage1_my_demo/simulation_run.v1.json" --json`。
+
+本地独立复跑：A **391** 项、B **99** 项测试通过；合成与已核验 prepared 前 3 任务的 fake 输出都通过 B。B 只检查文件结构、诊断自洽和声明，不独立证明来源/指纹真实，不计算准确率。真实 prepared 路径需显式提供，不默认寻找私有目录。
+
+输出先写本次 `.part`、验证后原子硬链接发布；不支持硬链接就拒绝。已有目录/文件不覆盖；用户伪名不是完整匿名化，生成正文也没有内容级脱敏保证。
+
+### 数据集、幻觉与记忆的学习入口
+
+- [数据集怎么选、哪些尚未适配、许可边界](docs/DATASETS.md)
+- [当前能力、指标定义、幻觉识别与记忆实现](docs/AGENT_CAPABILITIES.md)
+- [逐步开发计划与验收标准](docs/DEVELOPMENT_PLAN.md)
+- [P0 数据协议](docs/P0_IMPLEMENTATION_GUIDE.md) / [P1 可靠性机制](docs/P1_IMPLEMENTATION_GUIDE.md) / [合成 Demo](docs/P3_IMPLEMENTATION_GUIDE.md)
+
+真实评论、标签、prompt、逐任务结果和实验报告不公开上传。真实模型调用、第三方数据传输、人工评审或付费服务需先确认数据使用范围与预算；模拟内容不能冒充真实用户发布。
+
+---
+
+## 原课程与历史实现说明（保留）
+
 An LLM-based user simulation agent developed for the CS245 Agent Society
 course project, Track A.
 
@@ -79,14 +143,67 @@ Task
   - manifest revalidation against current local task/review sources
   - fail-closed context provider and framework-free, serial ablation prototype
   - `No_Memory`, `Generated_Review_Memory`, `Trusted_History_Stats`, `Combined`
+- `amazon_p0.py`
+  - offline Amazon 2014 5-core adapter with an explicit, pinned, size-capped
+    download command and strict bounded parsing (shared 64 MiB / 100k-row
+    gates, no `eval`)
+  - field mapping with locally stable pseudonyms, dropped non-verifiable
+    metadata, rejection/duplicate audits and desensitized source policy
+  - frozen-history day-cut task construction, repeated-user multi-task
+    selection, paired task/groundtruth files and a canonical strict manifest
+    consumed by the existing `TemporalContextProvider`
+  - no-LLM runner producing aggregate redacted `report.json` / `report.md`
+    plus local per-task prediction files in new, refuse-to-overwrite dirs
+- `rating_baselines.py`
+  - four deterministic label-safe baselines (global, shrunk user, shrunk
+    item, fixed combined) that only accept provider-visible contexts and a
+    verified global prior; prediction functions never receive groundtruth
+    ratings, and actual stars are read only by the scorer after predictions
+  - deterministic user-cluster bootstrap with shared resamples per baseline
+    and paired differences against the global mean
 - `score_calibration.py`
   - bias and linear score calibrators; explicit temporal validation/test helper
+- `reliable_agent.py`
+  - P1 reliable single-agent tool workflow over strict provider contexts
+    (honestly a tool-augmented workflow, not an autonomous multi-agent
+    system): executor-internal evidence tool with no query surface and
+    bounded row/text/byte payloads, reserve-before-read tool budgets,
+    task-scoped `evidence_id` registry, bounded structured rendering with a
+    no-rendered-evidence refusal, strict output validation (byte/duplicate/
+    depth/type/reference gates) with at most one repair, explicit
+    `success`/`degraded`/`refused`/`failed` statuses, pre-call budget
+    reservations with hard ceilings, sanitized typed failures, and a
+    success-only generated-memory gate with recall validation and one-shot
+    run binding
+  - `load_verified_prepared_dataset` reuses every P0 gate (artifact size/row
+    gates before parsing, policy validation, selection reconstruction,
+    eligible-prefix prior re-verification, strict provider revalidation)
+  - offline synthetic tests and injected fake callables only; no real-LLM
+    accuracy is measured or claimed
+- `p1_smoke.py`
+  - offline P1 smoke CLI: `synthetic` runs the required contract scenarios
+    (cross-date same-user memory, same-day isolation, user isolation,
+    success/failure/repair/budget stop, injection filtering, insufficient
+    evidence, render-gate refusal); `prepared` revalidates a local P0
+    prepared directory and runs a deterministic fake callable through the
+    shared gates
+  - prepared is a non-expected-failure gate: any unexpected transport/
+    internal `failed` task makes the contract fail and the CLI exit nonzero
+    (the diagnostic report is kept), while legitimate `refused`/`degraded`
+    outcomes are reported separately in `prediction_coverage` and are never
+    counted as successes; citations are checked per record against that
+    task's own rendered prompt, not a run-wide union
+  - expected-failure scenarios count as `contract_passed`, never as
+    prediction successes; failures exit nonzero; reports contain only safe
+    numbers/enums/digests
 - `inspect_agent_output.py`
   - interactive single-task inspection
   - predicted-vs-ground-truth comparison
   - generated review inspection
 - `tests/`
-  - 181 offline tests covering the agent, evaluation, calibration and temporal context prototype
+  - 344 offline tests covering the agent, evaluation, calibration, temporal
+    context prototype, the offline P0 Amazon rating baselines and the P1
+    reliable tool workflow (with fakes only)
 - `final_project.ipynb`
   - course experiment notebook and execution record
 - `docs/SYNTHETIC_MEMORY_ABLATION.md`
@@ -146,11 +263,14 @@ Do not commit `.env` files, API keys, datasets or generated results.
 
 ## Running Tests
 
-The 181 offline tests cover the agent workflow (with fakes), profile
+The 344 offline tests cover the agent workflow (with fakes), profile
 statistics, quality thresholds, hybrid reference ranking, injection and
 leakage checks, conditional reflection, structured output, calibration,
-per-task records and paired bootstrap tests. They require neither the
-simulator framework nor an API key:
+per-task records, paired bootstrap tests, strict temporal contexts, the
+offline P0 Amazon rating baselines and the P1 reliable tool workflow
+(executor-fixed evidence scope, rendered-citation validation, strict result
+statuses, budget reservations, memory write gates and the offline smoke
+CLI). They require neither the simulator framework nor an API key:
 
 ```bash
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
@@ -260,7 +380,7 @@ Notes:
 - Prefer a GPU or high-RAM runtime: importing the framework loads TensorFlow,
   PyTorch and transformers, and the default CPU runtime can disconnect under
   that load. The environment setup itself is verified on the default runtime
-  (181 offline tests plus `--dry-run` pass).
+  (344 offline tests plus `--dry-run` pass).
 - Without `langchain`/`langchain-chroma` (step 3b), the optional framework
   `MemoryDILU` enhancement is skipped; this does **not** disable memory. The
   evaluation runner's `use_memory` configurations always use the dependency-free
@@ -299,10 +419,54 @@ Implemented and unit-tested offline:
   prompt-trace inspection, time-filtered manifests, rating-bias intervals and
   per-task candidate/recall/prompt-inclusion diagnostics;
 - per-run artifacts (`metadata.json`, per-task JSON, comparisons) and LLM
-  usage counters.
+  usage counters;
+- an offline P0 Amazon 2014 Musical Instruments pipeline (strict adapter,
+  frozen-history tasks, strict provider consumption, four label-safe
+  baselines, user-cluster bootstrap and redacted reports) with dedicated
+  synthetic tests; a small real-file run was executed locally with only
+  aggregate outputs, kept in gitignored directories;
+- a P1 reliable single-agent tool workflow (`reliable_agent.py`) over the
+  strict P0/temporal provider contexts: executor-internal evidence tool with
+  no query surface and bounded payloads (every fixed read reserved before it
+  runs), task-scoped evidence registry and rendered-citation validation,
+  bounded structured rendering, strict validation with at most one repair,
+  explicit `success`/`degraded`/`refused`/`failed` results, pre-call budget
+  reservations with failed attempts counted and hard ceilings, sanitized
+  typed LLM failures, and a success-only generated-memory gate with
+  strictly-earlier event-time recall, per-entry recall validation and
+  one-shot run binding; plus an offline `p1_smoke.py` CLI
+  (`synthetic` / `prepared`, fake callables only, failures nonzero, redacted
+  reports).
 
 Honest limitations that remain:
 
+- P1 is a tool-augmented single-agent workflow, not an autonomous multi-agent
+  system; it has been exercised only with injected fake callables and
+  synthetic/offline fixtures. No real-LLM behavioral, accuracy, latency or
+  cost result exists, and any paid-model run or sending raw reviews to a
+  third party needs separate budget and permission;
+- provenance validation proves citation scope against the actually rendered
+  registry, not semantic or factual correctness; injection filtering and the
+  leakage threshold are bounded heuristics, not security guarantees;
+- generated memory is style reference only: it is never used as a rating
+  statistic, and a `degraded` statistical fallback is computed only from
+  actually rendered real evidence rows and is never presented as model
+  success;
+- deadline handling checks before requests and between requests only; an
+  in-flight blocking call is not force-cancelled. Online usage reporting is
+  not wired, so `actual_token_usage` is `unknown` for fake callables and no
+  dollar cost is ever estimated;
+- the P0 Amazon dataset has no explicitly verified license
+  (`license_status = not_explicitly_verified`, research use pending
+  confirmation); its source file, tasks, labels and per-task outputs are not
+  tracked or distributed in this repository - they remain local and
+  gitignored and must not be redistributed;
+- P0 event-time semantics rest on a caller assertion for the documented
+  `unixReviewTime` field at UTC-day granularity; the target cohort is a
+  conditional repeated-user sample after the frozen cut day, not a
+  representative sample of the raw file, and its test split is not the raw
+  file's last 20%; P0 baseline numbers are static-policy measurements, not
+  Memory or LLM effects;
 - the temporal context provider, four ablation contracts and time-filtered
   manifest have synthetic/offline tests only. The real Simulator path is not
   time-safe and is fail-closed for `--temporal-manifest` / `--temporal-ablation-mode`;
@@ -329,7 +493,8 @@ Honest limitations that remain:
   assets; the focused live synthetic run validates memory wiring, not model
   quality;
 - the course task/groundtruth/processed-review data and the 2026 per-task run
-  artifacts are not in this checkout; source leakage and target-time semantics
+  artifacts are not tracked or distributed in this repository; source
+  leakage and target-time semantics
   therefore remain unverified here;
 - session-provided 2026 paired aggregates showed actual Memory recall in 0/400
   Yelp, 0/400 Amazon and 2/400 Goodreads tasks; those aggregate differences are
@@ -398,6 +563,143 @@ fixtures and does not support the known 4.22 GB review asset. The external
 Simulator adapter remains unverified; requesting temporal mode from
 `comprehensive_evaluation.py` exits before creating results or importing the
 framework. See the audit report for strict prerequisites and remaining gates.
+
+## Offline P0 Amazon Rating Baselines (No LLM)
+
+`amazon_p0.py` builds a field-traceable, time-safe, label-isolated offline
+task set from the public Amazon 2014 Musical Instruments 5-core file, and
+`rating_baselines.py` scores four deterministic rating baselines against it.
+The pipeline is fully offline apart from the explicitly invoked `download`
+subcommand; it makes no LLM or Simulator calls and keeps every real review,
+task, label and per-task result inside gitignored `Dataset/` directories.
+
+Design essentials (details in `docs/P0_IMPLEMENTATION_GUIDE.md`):
+
+- strict bounded parsing of `.jsonl/.json/.gz` with the shared 64 MiB
+  (including decompressed) / 100,000-row gates, no `eval`, per-record caps,
+  explicit rejection/duplicate audits and locally pseudonymized identifiers;
+- a frozen observed-history prefix cut at a day boundary, and target
+  selection from repeated users with at least two distinct UTC dates each
+  (never one task per user; budgets that cannot satisfy the contract fail
+  closed), with a runtime review source of frozen history plus selected
+  target rows only;
+- the global prior is computed from the eligible frozen prefix only: selected
+  target ids and matchable target-text copies are masked out, prefix/excluded/
+  eligible counts are recorded, and the runner recomputes and verifies the
+  prior and the recorded selection from the validated artifacts;
+- the existing strict `TemporalContextProvider` withholds every selected
+  target (all splits) and duplicate/matching target texts from every context;
+  the canonical manifest partitions the selected target cohort only, not the
+  raw file;
+- global/user/item/fixed-combined baselines with documented shrinkage
+  (`lambda = 5`, `weight_user = 0.5`), explicit cold-start fallback counts and
+  continuous 1..5 predictions; prediction functions never receive groundtruth
+  ratings; groundtruth is parsed for verification/exclusion, while the scorer
+  uses target ratings only after predictions are complete;
+- deterministic user-cluster bootstrap with one shared resample per
+  iteration for every baseline, paired differences against the global mean,
+  and no fabricated intervals for empty or single-cluster tests;
+- run-time artifact size/row gates before any parsing, bounded readers,
+  policy parameter/protocol validation with report fields rebuilt from fixed
+  safe constants, and aggregate `report.json` / `report.md` with no
+  identifiers, review text, unvalidated free text or paths, written to new
+  refuse-to-overwrite directories;
+- the `download` subcommand accepts only the exact pinned official HTTPS
+  archive, bounds `--max-bytes`, fully validates the gzip stream (CRC,
+  truncation, decompression cap) before an atomic publish, and never
+  overwrites existing files.
+
+The dataset page was not found to state an explicit data license, so
+`license_status` is recorded as `not_explicitly_verified` (research use
+pending confirmation), and local data is not redistributed. Reported
+baseline numbers are what they are - static offline rating policies - and
+are not Memory or LLM results.
+
+```powershell
+# Explicit download of only the pinned official archive (gitignored path);
+# every later command is offline.
+py amazon_p0.py download `
+  --url https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Musical_Instruments_5.json.gz `
+  --output Dataset\amazon_musical_instruments_p0\raw\reviews_Musical_Instruments_5.json.gz
+
+py amazon_p0.py prepare `
+  --source Dataset\amazon_musical_instruments_p0\raw\reviews_Musical_Instruments_5.json.gz `
+  --work-dir Dataset\amazon_musical_instruments_p0\prepared_v2 `
+  --history-ratio 0.6 --max-tasks 400 --seed 42 `
+  --confirm-target-timestamp-semantics
+
+py amazon_p0.py run `
+  --prepared-dir Dataset\amazon_musical_instruments_p0\prepared_v2 `
+  --output-dir Dataset\amazon_musical_instruments_p0\baseline_v2 `
+  --n-boot 2000 --seed 42
+```
+
+## Offline P1 Reliable Tool Workflow (Fake LLM Only)
+
+`reliable_agent.py` turns the strict P0/temporal provider contexts into a
+single-agent, tool-augmented workflow with an explicit contract: verified
+evidence -> structured prediction -> strict validation and at most one repair -> explicit status -> one memory write only on validated success. It reuses the
+existing P0 gates through `load_verified_prepared_dataset` and never modifies
+the P0 artifacts.
+
+Design essentials (details in `docs/P1_IMPLEMENTATION_GUIDE.md`):
+
+- the executor-internal `TaskEvidenceTool` has no caller-settable
+  `user`/`item`/`as_of`/`path` queries and is **not** an external permission
+  sandbox: it is an in-process object for one fixed task whose getters return
+  bounded `ToolPayload`s (row/text/byte caps, newest-first history sampling,
+  full-source digest and character range preserved on truncated text). Every
+  fixed tool read is reserved atomically before any getter runs, so an
+  unaffordable or expired budget reads nothing. Evidence rows get task-scoped
+  `evidence_id`s tied to kind, source row and text digest, so cross-task refs
+  and same-text other-source refs cannot pass;
+- prompts are rendered in bounded structured form (fixed trusted
+  instructions, JSON-escaped untrusted evidence lines, per-section entry/text
+  and total byte caps); citations are validated against the **actually
+  rendered** registry, never inferred by substring search; a task whose
+  registered rows cannot be rendered at all is refused
+  (`no_rendered_evidence`) before any LLM call;
+- strict validation byte-gates the raw completion before parsing and rejects
+  booleans, NaN/Infinity, huge-integer overflow, off-grid/out-of-range stars,
+  duplicate JSON keys, deeply nested JSON, too many or unknown refs, empty or
+  overlong reviews, wrong/extra fields and non-JSON output; at most one
+  repair is sent (`repair_requested`/`repair_attempted`/reserve failure are
+  reported separately), and an unrepairable draft with visible evidence
+  degrades to a labeled statistical baseline computed only from rendered real
+  evidence rows;
+- budgets are reserved per call against per-task and whole-run caps with
+  explicit hard ceilings (failed attempts count, run caps never reset per
+  task, a requested per-call output token cap is checked before any attempt,
+  repairs only with remaining budget), and typed `LLMTransportError` failures
+  never leak exception text, paths or keys;
+- the generated-memory store writes only final validated model successes
+  once, records origin/order/event-time/provenance, validates every recalled
+  entry (current user, strictly earlier event time, trusted origin, run
+  binding) before rendering, and refuses a store that is not fresh or not
+  bound to the exact run id; aggregate reports hash the caller run label and
+  accept only a fixed `model_source` enum. Generated text/stars are style
+  reference only, never rating statistics.
+
+```powershell
+# Synthetic contract scenarios with scripted fakes (7 scenarios; expected
+# failures count as contract_passed, never as prediction successes).
+.\.venv\Scripts\python.exe p1_smoke.py synthetic --output-dir results\p1_smoke_run
+
+# Local P0 prepared directory through every shared gate + deterministic fake
+# (offline; no API key; report has safe aggregates only, accuracy_claim=none).
+.\.venv\Scripts\python.exe p1_smoke.py prepared `
+  --prepared-dir Dataset\amazon_musical_instruments_p0\prepared_v2 `
+  --output-dir results\p1_prepared_smoke --max-tasks 12
+```
+
+Expected-failure scenarios and contract checks keep the smoke honest: the
+synthetic expected-failure scenarios count as contract passes but never as
+prediction successes; the prepared mode treats any unexpected
+transport/internal `failed` task as a contract failure and exits nonzero
+(keeping the report for diagnosis), while legitimate `refused`/`degraded`
+outcomes are counted separately in `prediction_coverage` and are never
+reported as successes. No accuracy, Memory-gain or real-LLM claim is
+produced.
 
 ## Attribution
 

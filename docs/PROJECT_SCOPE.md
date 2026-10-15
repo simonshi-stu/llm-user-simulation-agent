@@ -17,6 +17,10 @@ framework source into the project history.
 | `comprehensive_evaluation.py` | Experiment runner, metric calculation, result persistence and report helpers | Personal evaluation work |
 | `memory_audit.py` | No-LLM redacted audit, prompt-trace checks and temporal manifests | Personal evaluation tooling |
 | `temporal_context.py` | Fail-closed manifest revalidation, current-source context reconstruction and serial offline ablation prototype | Personal offline evaluation tooling; not a Simulator adapter |
+| `amazon_p0.py` | Offline Amazon 2014 5-core adapter, explicit pinned download, frozen-history task/manifest construction, strict provider consumption and redacted P0 reports | Personal offline evaluation tooling; no LLM or Simulator calls |
+| `rating_baselines.py` | Label-safe global/user/item/combined rating baselines and deterministic user-cluster bootstrap | Personal offline evaluation tooling |
+| `reliable_agent.py` | P1 reliable single-agent tool workflow over strict provider contexts: executor-internal evidence tool with bounded row/text/byte payloads and reserve-before-read budgets, task-scoped evidence registry and rendered-citation validation, bounded structured rendering with a no-rendered-evidence refusal, strict validation (byte/duplicate/depth/type/reference gates) with at most one repair, explicit four-state results, pre-call budget reservations with hard ceilings, sanitized typed failures and a success-only generated-memory gate with event-time recall validation and one-shot run binding | Personal offline tooling; fake callables and synthetic tests only |
+| `p1_smoke.py` | Offline P1 smoke CLI (`synthetic` / `prepared`), fake-only; prepared treats unexpected failed tasks as a contract failure with a nonzero exit and reports legitimate refused/degraded coverage separately; redacted aggregate reports | Personal offline tooling |
 | `inspect_agent_output.py` | Interactive task-level output inspection and error display | Personal tooling |
 | `final_project.ipynb` | Course experiment notebook and execution record | Personal experiment artifact |
 | `ablation_results_yelp_clean.json` | Yelp archived metrics | Personal experiment result |
@@ -45,13 +49,25 @@ discipline, failure handling and reproducibility.
 > Progress: the evaluation CLI, the offline pytest suite, the no-network
 > `--dry-run` smoke check, hybrid reference ranking, structured JSON output,
 > conditional reflection, safety checks, calibration helpers, per-task paired
-> statistics, run-local Memory, privacy-conscious data/prompt audits and a
-> strict temporal-manifest builder and a framework-independent temporal context
-> provider/four-mode fake ablation suite are implemented and synthetic-tested
-> (see `docs/PROJECT_GUIDE.md` and
-> `docs/MEMORY_EVALUATION_AUDIT_2026-09.md`). Remaining gaps: no authorized
+> statistics, run-local Memory, privacy-conscious data/prompt audits, a
+> strict temporal-manifest builder, a framework-independent temporal context
+> provider/four-mode fake ablation suite, the offline P0 Amazon 2014 Musical
+> Instruments pipeline (strict adapter, frozen-history tasks, four label-safe
+> baselines, user-cluster bootstrap, redacted reports) and the P1 reliable
+> single-agent tool workflow (executor-internal evidence tool with bounded
+> payloads and reserve-before-read budgets, rendered-citation validation,
+> strict four-state results, budget reservations with hard ceilings, typed LLM
+> failures, success-only generated-memory gates with recall validation and
+> one-shot run binding, and an offline smoke CLI) are
+> implemented and synthetic-tested (see `docs/PROJECT_GUIDE.md`,
+> `docs/MEMORY_EVALUATION_AUDIT_2026-09.md`,
+> `docs/P0_IMPLEMENTATION_GUIDE.md` and `docs/P1_IMPLEMENTATION_GUIDE.md`).
+> The P0 pipeline was run once on the authorized small public file with
+> aggregate outputs kept in gitignored directories; the P1 workflow has not
+> been run against any real model. Remaining gaps: no authorized
 > task/groundtruth/processed-review assets or 2026 per-task artifacts are
-> available in this checkout; temporal fields and Simulator ordering are not
+> tracked or distributed in this repository; temporal fields and Simulator
+> ordering are not
 > verified here; the real Simulator adapter remains deliberately fail-closed
 > because full user/item review, profile, prompt and output-order contracts are
 > not verified. `Trusted_History_Stats` is an offline prototype pending owner

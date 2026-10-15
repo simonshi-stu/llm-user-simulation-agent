@@ -25,3 +25,9 @@ jobs:
 
       - name: No-network smoke check
         run: python comprehensive_evaluation.py --dry-run
+
+      - name: P3 demo contract + loopback self check (offline)
+        run: python demo_app.py --check
+
+      - name: P1 synthetic smoke (offline fake callables)
+        run: python p1_smoke.py synthetic --output-dir "$RUNNER_TEMP/p1-smoke-out"

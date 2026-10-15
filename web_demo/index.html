@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <title>P3 本地作品集 Demo · LLM 用户模拟 Agent（合成 / fake-only）</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#results">跳到结果区域</a>
+
+  <header class="topbar">
+    <div class="topbar-text">
+      <h1>LLM 用户模拟 Agent · P3 本地作品集 Demo</h1>
+      <p class="subtitle">离线 · 合成 fixture · 本地 fake 模型 · 无真实 LLM 调用 · 每请求全新 LLM/预算/记忆</p>
+    </div>
+    <div class="badges">
+      <span class="badge badge-sim" id="badge-sim">SIMULATED · 合成演示 · 非真实用户数据</span>
+      <span class="badge badge-conn" id="server-status" role="status">正在连接本地演示服务…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel controls" aria-label="演示控制区">
+      <section aria-labelledby="h-scenario">
+        <h2 id="h-scenario">1 · 场景（固定枚举）</h2>
+        <label for="scenario-select">选择合成场景</label>
+        <select id="scenario-select" aria-describedby="scenario-desc" disabled>
+          <option value="">加载中…</option>
+        </select>
+        <p id="scenario-desc" class="hint">正在读取本地演示服务…</p>
+      </section>
+
+      <section aria-labelledby="h-mode">
+        <h2 id="h-mode">2 · 模式（合同来自 temporal_context）</h2>
+        <fieldset id="mode-fieldset" disabled>
+          <legend class="sr-only">四模式选择</legend>
+          <div id="mode-list" class="mode-list">
+            <p class="hint">加载中…</p>
+          </div>
+        </fieldset>
+        <p class="hint">
+          四种模式复用完全相同的 provider 历史/参考（逐字节一致），
+          仅切换 generated memory 与 trusted stats 两个开关。
+        </p>
+      </section>
+
+      <section aria-labelledby="h-run">
+        <h2 id="h-run">3 · 运行</h2>
+        <button id="run-button" type="button" disabled>运行合成演示</button>
+        <p class="hint">
+          默认不保存任何产物；运行仅在本机回环 HTTP 上进行，
+          下载报告由浏览器本地生成。
+        </p>
+      </section>
+
+      <section aria-labelledby="h-p2" class="p2-panel">
+        <h2 id="h-p2">P2 评测面板（占位）</h2>
+        <p><strong id="p2-status">评测集成待验收</strong></p>
+        <p id="p2-real-llm">真实 LLM 实测未运行</p>
+        <p class="hint" id="p2-note">本 Demo 不导入 P2 接口，不展示任何未经独立验收的评测数字（无 RMSE 等指标）。</p>
+      </section>
+
+      <section aria-labelledby="h-safety" class="safety-panel">
+        <h2 id="h-safety">安全边界（摘要）</h2>
+        <ul id="safety-list" class="tight-list">
+          <li>仅回环地址 127.0.0.1 / ::1。</li>
+          <li>POST 只接受固定枚举 scenario/mode。</li>
+          <li>响应仅含脱敏聚合与合成 shape。</li>
+        </ul>
+      </section>
+    </aside>
+
+    <section class="results" id="results" aria-label="演示结果">
+      <div id="status-region" class="status-region" role="status" aria-live="polite">
+        尚未运行。选择场景与模式后点击「运行合成演示」。
+      </div>
+      <div id="error-region" class="error-region" role="alert" hidden></div>
+
+      <div id="empty-state" class="empty-state">
+        <p>这里将展示：跨日期执行 timeline、四状态结果、真实历史 vs 生成记忆、
+        安全证据（实际渲染 / 被引用注册表）、预算与修复、四模式对比。</p>
+        <p class="hint">所有内容均为合成示例；运行前页面不会发起任何外部请求。</p>
+      </div>
+
+      <div id="results-body" hidden>
+        <section class="card" aria-labelledby="h-run-summary">
+          <div class="card-head">
+            <h2 id="h-run-summary">运行摘要</h2>
+            <span class="badge badge-sim">simulated = true</span>
+          </div>
+          <dl class="kv" id="run-summary"></dl>
+          <p class="hint" id="privacy-note"></p>
+        </section>
+
+        <section class="card" aria-labelledby="h-timeline">
+          <h2 id="h-timeline">跨日期执行 timeline（按 execution_order）</h2>
+          <ol id="timeline" class="timeline"></ol>
+        </section>
+
+        <section class="card" aria-labelledby="h-task">
+          <div class="card-head">
+            <h2 id="h-task">任务详情</h2>
+            <div class="inline-control">
+              <label for="detail-mode-select">详情模式</label>
+              <select id="detail-mode-select"></select>
+            </div>
+          </div>
+          <div id="task-tabs" class="task-tabs" role="tablist" aria-label="任务选择"></div>
+          <div id="task-panel" class="task-panel" role="tabpanel" tabindex="0"></div>
+        </section>
+
+        <section class="card" aria-labelledby="h-compare">
+          <h2 id="h-compare">四模式对比（同一上下文，仅两个开关）</h2>
+          <p id="compare-note" class="hint"></p>
+          <div class="table-wrap">
+            <table id="compare-table" aria-label="四模式对比表"></table>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="h-stats">
+          <h2 id="h-stats">统计面板</h2>
+          <div id="stats-panel"></div>
+        </section>
+
+        <section class="card" aria-labelledby="h-download">
+          <h2 id="h-download">脱敏报告</h2>
+          <p class="hint">
+            下载内容仅包含已展示的聚合数字与合成 shape：不含 GT、prompt 原文、
+            真实数据、密钥或文件路径。报告在浏览器本地生成，服务器不保存产物。
+          </p>
+          <button id="download-button" type="button" disabled>下载脱敏 JSON 报告</button>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>本地作品集演示 · 无第三方 CDN/字体/网络请求 · 所有示例均为手写合成数据。</p>
+    <p id="footer-run-info">runhash / synthetic session 信息将在运行后显示。</p>
+  </footer>
+
+  <noscript>
+    <p class="error-region">此演示需要启用 JavaScript（无外部脚本，仅本地 /app.js）。</p>
+  </noscript>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
