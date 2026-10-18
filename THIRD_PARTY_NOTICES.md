@@ -21,3 +21,13 @@ copied into this repository. Its original license and attribution remain
 applicable to the dependency. The framework's MIT license does not set the
 license terms for Amazon, Yelp or Goodreads data, which are not distributed
 here.
+
+## Related project (not a direct dependency)
+
+- [AgentSociety](https://github.com/tsinghua-fib-lab/AgentSociety) is the wider
+  LLM social-simulation platform from the same lab. This repository does not
+  vendor or install AgentSociety itself; the direct dependency above is the
+  AgentSocietyChallenge package.
+- AgentSociety is Apache-2.0 licensed. That license does not automatically
+  apply to this repository or to the challenge package; each project keeps its
+  own license and attribution.
