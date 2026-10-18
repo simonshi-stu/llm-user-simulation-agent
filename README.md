@@ -1,5 +1,11 @@
 # LLM User Simulation Agent
 
+## 上游框架与致谢
+
+本项目直接依赖 [tsinghua-fib-lab/AgentSocietyChallenge](https://github.com/tsinghua-fib-lab/AgentSocietyChallenge) 发布的 PyPI 包 `websocietysimulator==1.0.0a30`（WWW'25 AgentSociety Challenge，MIT License，Copyright (c) 2024 FIB LAB, Tsinghua University）。上游框架提供模拟环境、Agent 基类、任务交互工具与框架评测接口。本项目通过 `requirements.txt` 以 pip 依赖方式使用该框架，**未复制（vendored）上游源码**。
+
+本项目作者在上游之外的个人实现增量主要包括：用户画像与参考评论筛选、条件反思/修复、运行内 Memory，以及后续的本地离线数据协议、结果校验、预算与失败处理等可靠性工程。上游框架、示例、文档及评测接口的成果归其原作者所有，不应被表述为本项目的个人原创；本项目也不暗示获得上游作者或机构的认可或背书。上游框架采用 MIT License，这不改变 Amazon、Yelp、Goodreads 等数据集各自的许可与使用条件；本仓库不分发这些数据。
+
 ## 项目定位与当前状态（2026-10-14）
 
 **项目 A：根据安全可见的用户历史，模拟个性化评分与评论。**
@@ -198,13 +204,20 @@ Task
 
 The following framework is external to this repository:
 
-- PyPI package: `websocietysimulator==1.0.0a30`
+- PyPI package: `websocietysimulator==1.0.0a30` (pinned in `requirements.txt`)
+- Upstream repository:
+  [tsinghua-fib-lab/AgentSocietyChallenge](https://github.com/tsinghua-fib-lab/AgentSocietyChallenge)
 - Original project: WWW'25 AgentSociety Challenge
-- Original framework authors and license are recorded in
-  `THIRD_PARTY_NOTICES.md`
+- Upstream scope: simulation environment, agent base classes, task interaction
+  tools and framework evaluation interfaces
+- License: MIT for the framework code; attribution and copyright details are
+  recorded in `THIRD_PARTY_NOTICES.md`
 
-The original framework source, examples, tutorials, static assets, generated
-data and course task files are intentionally not copied into this repository.
+The framework is installed from PyPI as a dependency and is not vendored. The
+original framework source, examples, tutorials, static assets, generated data
+and course task files are intentionally not copied into this repository.
+The framework's MIT license does not set the license terms for Amazon, Yelp or
+Goodreads data, which are not distributed here.
 
 ## Archived Results
 
