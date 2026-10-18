@@ -1,133 +1,133 @@
-# LLM User Simulation Agent
+# LLM 用户模拟 Agent
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[简体中文](README.md) | [English](README.en.md)
 
-A research prototype that simulates how a particular user might rate and review a product. It looks only at that user's earlier history, then produces a star rating and a short review. The result is passed to a separate evaluation project instead of being judged by the same code that generated it.
+这是一个研究原型：根据某个用户过去的行为，模拟他面对一件新商品时可能给出的星级和评论。它只读取该用户更早的历史，生成结果后交给独立的评测项目检查，而不是让生成代码自己给自己打分。
 
-This is not a bot for posting reviews, and it does not claim to know what the real user actually thinks.
+它不是用来冒充真人发评论的机器人，也不声称知道用户真实的想法。
 
-## 0. Credits and acknowledgements
+## 0. 引用与致谢
 
-- **[AgentSociety](https://github.com/tsinghua-fib-lab/AgentSociety)** (FIB Lab, Tsinghua University). The wider research platform for LLM-based social simulation. This repository does not vendor AgentSociety itself.
-- **[AgentSocietyChallenge](https://github.com/tsinghua-fib-lab/AgentSocietyChallenge)** (FIB Lab, Tsinghua University, MIT License). The direct simulation dependency: the project installs its PyPI package, `websocietysimulator==1.0.0a30`, which provides the simulation environment, agent base classes, task interaction tools, and framework evaluation interfaces.
-- **Amazon Product Data (2014), Musical Instruments 5-core reviews**, maintained by Julian McAuley's group at UC San Diego. The dataset page is [here](https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html). Raw reviews, target labels, and private run files are not distributed in this repository. Public availability does not settle redistribution or commercial-use rights.
-- **[Project B: Amazon review evaluation and diagnostics](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)**. The independent evaluation side of this work.
+- **[AgentSociety](https://github.com/tsinghua-fib-lab/AgentSociety)**（清华大学 FIB Lab）。更广泛的 LLM 社会模拟研究平台；本仓库没有复制或内嵌 AgentSociety 本身。
+- **[AgentSocietyChallenge](https://github.com/tsinghua-fib-lab/AgentSocietyChallenge)**（清华大学 FIB Lab，MIT License）。项目直接依赖的模拟框架：通过 PyPI 安装 `websocietysimulator==1.0.0a30`，使用其模拟环境、Agent 基类、任务交互工具和框架评测接口。
+- **Amazon Product Data（2014）Musical Instruments 5-core 评论**，由加州大学圣地亚哥分校 Julian McAuley 团队维护，数据入口在[这里](https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html)。本仓库不分发原始评论、目标标签或私有运行文件。“网上可以下载”不等于可以自由再分发或商用。
+- **[项目 B：Amazon 评论评测与诊断](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)**。同一项工作的独立评测侧。
 
-The people and organisations above provided framework code, data, or hosting. They did not write this project's design and do not endorse its conclusions.
+以上个人和机构提供了框架代码、数据或托管能力，但没有参与本项目的设计，也不为项目结论背书。
 
-The parts added on top of the upstream framework include user profiling, reference-review selection, conditional reflection/repair, in-run memory, and later work on time safety, evidence checks, budgets, and failure handling. Upstream code and examples remain the work of their original authors.
+在上游框架之外，本项目增加的内容包括用户画像、参考评论筛选、条件反思／修复、运行内 Memory，以及后续的时间安全、证据检查、预算和失败处理。上游代码和示例仍归原作者所有。
 
-## 1. What this project is for, and why it is needed
+## 1. 这个项目有什么用？为什么需要它？
 
-A simulated review can sound natural and still be wrong. It may miss the user's rating by three stars, copy a reference review, invent a purchase experience, or fail halfway through the run. A single example, or a single accuracy number, hides those differences.
+一段模拟评论可以读起来很自然，但星级完全错了；也可能大段复制参考评论、编造购买经历，或者跑到一半失败。只看一条示例，或者只看一个准确率数字，这些区别都会被盖住。
 
-This project exists to make user simulation testable:
+这个项目想把用户模拟变成可以检查的东西：
 
-- **Personalised prediction.** Given a user's safe history and a target item, predict the rating and review that user might produce.
-- **Cold-start and history studies.** Compare users with long, short, or no usable history instead of assuming everyone behaves the same.
-- **Offline evaluation.** Generate simulated feedback for experiments without asking real people to write new reviews.
-- **A clean hand-off to evaluation.** Export a versioned result that Project B can check and score without reading the generation code.
+- **个性化预测。** 给定用户的安全历史和目标商品，预测他可能给出的评分与评论。
+- **冷启动和历史长度研究。** 比较历史很长、很短、甚至没有可用历史的用户，而不是假设所有人都一样。
+- **离线评测。** 为实验生成模拟反馈，不必每次找真人重新写评论。
+- **把结果干净地交给评测端。** 导出版本化结果，让项目 B 在不读取生成代码的情况下检查和评分。
 
-The output is always marked as simulated. It is not a real customer's opinion and must not be published as one.
+所有输出都会标记为模拟内容。它不是真实顾客的意见，不能当作真实评论发布。
 
-## 2. How it is used
+## 2. 怎么使用？整个流程是什么样？
 
-A typical run looks like this:
+一次典型运行是这样的：
 
 ```text
-safe user history + target item
+安全的用户历史 + 目标商品
         ↓
-profile statistics and reference-review selection
+画像统计与参考评论筛选
         ↓
-prompt with bounded, actually rendered evidence
+只包含实际渲染证据、长度受限的 Prompt
         ↓
-LLM draft -> validation -> at most one repair if needed
+LLM 初稿 -> 校验 -> 必要时最多修复一次
         ↓
-success / degraded / refused / failed
+成功 / 降级 / 拒绝 / 失败
         ↓
-rating, review, and run diagnostics
+评分、评论与运行诊断
         ↓
-Project B: independent scoring and diagnosis
+项目 B：独立评分与诊断
 ```
 
-The important part is what the model does **not** get: future reviews, the target rating, or another user's history. Memory, when enabled, only recalls earlier generated results for the same user and is treated as a style reference, never as a trusted rating label.
+关键在于模型**拿不到**什么：未来评论、目标评分、其他用户的历史。启用 Memory 时，也只召回同一用户更早生成的记录，并且只作为表达风格参考，不能当作可信评分标签。
 
-Concrete questions this setup can support:
+这套设置可以回答这些问题：
 
-- Would this user rate a new item higher or lower than their usual level?
-- Does a new prompt or retrieval setting improve results on the same tasks?
-- Does memory help after it actually enters the prompt, or does it only add cost?
-- Can the agent generalise to users it has not seen before?
+- 面对一件新商品，这个用户会比平时打得更高还是更低？
+- 换一个 Prompt 或检索方式，在同一批任务上有没有变好？
+- Memory 真的进入 Prompt 后有没有帮助，还是只增加了成本？
+- Agent 能不能泛化到没见过的用户？
 
-## 3. Current progress
+## 3. 项目目前做到哪一步？
 
-**Working today**
+**已经能用**
 
-- The original AgentSociety-based course pipeline is kept: profiling, reference ranking, reflection/repair, and the course evaluation entry point.
-- A local Amazon Musical Instruments dataset has been audited: 10,261 reviews, 400 target tasks, and four fixed statistical baselines. The data stays local and is not redistributed.
-- A newer reliable workflow has offline coverage for bounded evidence, four result states, at most one repair, call budgets, and success-only memory writes.
-- A versioned `simulation_run.v1` result contract and a local synthetic export entry point were independently checked against the evaluation project. The application code is **not yet published on the public `main` branch**.
-- A synthetic browser demo was built and tested locally with fake data. It is not a live service and is not part of the current public deployment.
+- 保留原 AgentSociety 课程链路：用户画像、参考评论排序、条件反思／修复，以及课程评测入口。
+- 本地核验过 Amazon 乐器数据：10,261 条评论、400 个目标任务和四种固定统计基线。数据只留在本地，不再分发。
+- 新增的可靠工作流有离线测试覆盖：受限证据、四种结果状态、最多一次修复、调用预算，以及只在成功时写 Memory。
+- 版本化的 `simulation_run.v1` 结果契约和本地合成导出入口，已经和评测项目做过独立检查。应用代码**还没有发布到公开 `main`**。
+- 本地做过一个合成浏览器 Demo，用 fake 数据和模型输出测试过。它不是在线服务，也不在当前公开部署里。
 
-**Not finished yet**
+**还没有完成**
 
-- No new real-LLM benchmark has been run, so there is no current accuracy, style, cost, or latency score.
-- Human review of style and rating-review consistency has not been performed.
-- Memory is in-run only; it does not survive a restart and has not shown a measured benefit.
-- The public repository and the local development tree are not the same snapshot. A command that exists locally may not exist in a fresh clone.
+- 没有跑新版真实 LLM 评测，所以目前没有新的准确率、风格、成本或延迟成绩。
+- 没有做真人风格评审，也没有评“评分和评论是否一致”。
+- Memory 只在单次运行内有效，重启就没了，也没有测出收益。
+- 公开仓库和本地开发目录不是同一个快照。本地能跑的命令，fresh clone 不一定有。
 
-The short version: **the engineering skeleton and offline checks are real; the evidence that the simulation is accurate or personalised is still missing.**
+一句话：**工程骨架和离线检查是真的；但“模拟得准不准、够不够个性化”还没有证据。**
 
-## 4. How to use it
+## 4. 怎么使用？
 
-There is **no plugin and no hosted backend**. This is a Python project that runs locally (or in a notebook/Colab session). It needs an LLM client for real generation, but the test and contract paths use fakes and need no API key.
+这里**没有插件，也没有在线后端**。它是一个本地运行的 Python 项目，也可以在 notebook／Colab 里跑。真实生成需要接 LLM；测试和契约路径使用 fake，不需要 API key。
 
-### Install and test
+### 安装和测试
 
-Requires Python 3.10 or newer.
+需要 Python 3.10 或更新版本。
 
 ```powershell
 python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-The upstream framework is installed from PyPI; it is not vendored in this repository. Keep API keys in a local `.env` or environment variable, never in the repository.
+上游框架从 PyPI 安装，没有复制进本仓库。API key 放在本地 `.env` 或环境变量里，不要提交到仓库。
 
-### Run the local result-contract preview
+### 运行本地的结果契约预览
 
-These commands belong to the local development tree, not the current public `main`:
+下面的命令属于本地开发目录，不属于当前公开 `main`：
 
 ```powershell
 python -m user_simulator_project --dry-run
 python -m user_simulator_project --synthetic --max-tasks 3 --output-dir results/stage1_demo
 ```
 
-The output directory must be new and inside the repository's ignored `results/` or `Dataset/` tree. The exporter writes a temporary part file, validates it, and publishes it without overwriting an existing artifact. When the local tree is available, validate the result in Project B:
+输出目录必须是全新的，并且位于仓库里被忽略的 `results/` 或 `Dataset/` 目录下。导出器会先写临时文件、校验，再以不覆盖的方式发布；已有文件不会被替换。本地目录可用时，在项目 B 里验证：
 
 ```powershell
-python -m amazon_eval_agent validate --input "<absolute-path>/simulation_run.v1.json" --json
+python -m amazon_eval_agent validate --input "<绝对路径>/simulation_run.v1.json" --json
 ```
 
-Exit code `0` only means the artifact matches the contract. It does not mean the predictions are good.
+退出码 `0` 只表示结果文件符合契约，不代表预测准确。
 
-### Run a demo
+### 运行 Demo
 
-The public repository has no live user-simulation demo. A local synthetic demo was built during development, but its files are not all present in the published `main` snapshot. Do not describe it as a deployed product until the missing files are restored and the demo is republished.
+公开仓库没有在线用户模拟 Demo。开发时做过一个本地合成 Demo，但当前公开的 `main` 快照里缺少部分文件。在文件补齐并重新发布之前，不要把它说成已经上线的产品。
 
-If you run any local demo server, bind it to `127.0.0.1` and keep it off the public internet. The demo uses synthetic content and fake model outputs; never point it at private reviews or target labels.
+如果本地要起 Demo 服务，只绑定 `127.0.0.1`，不要暴露到公网。Demo 只用合成内容和 fake 模型输出，不能接真实评论或目标标签。
 
-### What not to do
+### 不该做什么
 
-- Do not use the agent to post reviews as a real person.
-- Do not send raw reviews, target labels, prompts, or run artifacts to a third-party model without permission and a defined budget.
-- Do not treat a successful fake run or a passing contract test as evidence of real model quality.
+- 不要用这个 Agent 冒充真人发布评论。
+- 未经许可、没有明确预算，不要把原始评论、目标标签、Prompt 或运行结果发给第三方模型。
+- 不要把 fake 跑通或契约测试通过，当成真实模型效果。
 
-## 5. Where to read more
+## 5. 继续阅读
 
-- [Dataset choices and licensing notes](docs/DATASETS.md)
-- [Capabilities, metrics, hallucination checks, and memory](docs/AGENT_CAPABILITIES.md)
-- [Step-by-step development plan and acceptance criteria](docs/DEVELOPMENT_PLAN.md)
-- [P0 data protocol](docs/P0_IMPLEMENTATION_GUIDE.md) / [P1 reliability workflow](docs/P1_IMPLEMENTATION_GUIDE.md) / [synthetic demo](docs/P3_IMPLEMENTATION_GUIDE.md)
-- [Project B: evaluation and diagnostics](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)
+- [数据集选择与许可说明](docs/DATASETS.md)
+- [能力、指标、幻觉检查与 Memory](docs/AGENT_CAPABILITIES.md)
+- [分步开发计划与验收标准](docs/DEVELOPMENT_PLAN.md)
+- [P0 数据协议](docs/P0_IMPLEMENTATION_GUIDE.md) / [P1 可靠工作流](docs/P1_IMPLEMENTATION_GUIDE.md) / [合成 Demo](docs/P3_IMPLEMENTATION_GUIDE.md)
+- [项目 B：评测与诊断](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)
 
-If you remember one thing: **this project is a controlled user-simulation prototype, not a proven personalised recommendation system.**
+如果只记住一句话：**这是一个受控的用户模拟原型，不是已经证明有效的个性化推荐系统。**
