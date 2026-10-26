@@ -1,6 +1,6 @@
 # Development Log
 
-本文件记录每一步开发的「目标 → 概念 → 代码 → 验收」，用于复习、讲解和面试准备。
+本文件记录每一步开发的「目标 → 概念 → 代码 → 验收」，用于开发记录、复现和工程讲解。
 代码与注释保持英文，说明使用中文。
 
 ## Step 2 — 修复 `parse_review_result`（多行丢行 / 静默舍入）
@@ -125,7 +125,7 @@ log   : stars 4.50 is not on the 1-5 grid, snapped to 5.0
 | `tests/test_agent_offline.py` | 新增 6 个回归用例（多行、正文换行、冒号保留、空正文、half-up、告警） |
 | `docs/DEVLOG.md` | 本文件 |
 
-### 6. 面试可讲的一句话
+### 6. 工程要点
 
 > 输出解析按标签定位而不是逐行截取，所以多行评论不会丢；评分归一采用确定性
 > half-up 并记录告警，避免用 Python 默认的银行家舍入静默改变预测值。
@@ -210,7 +210,7 @@ DRY RUN - no LLM calls will be made
 | `pytest.ini` | `--basetemp=.pytest_tmp`，测试临时文件留在项目内（E 盘） |
 | `README.md` / `docs/PROJECT_SCOPE.md` | 同步 CLI 用法与进度 |
 
-### 5. 面试可讲的一句话
+### 5. 工程要点
 
 > 评测入口是 CLI 化的：路径、任务数、worker 和模型都可配置，`--dry-run`
 > 不导入模拟器框架也不调用 API，因此可以在 CI 或无网络环境做冒烟校验；
@@ -238,7 +238,7 @@ DRY RUN - no LLM calls will be made
 `test_score_calibration.py`、`test_statistics.py`、`test_run_artifacts.py`、
 `test_llm_client.py`、`test_agent_workflow_offline.py`。
 
-面试可讲的一句话：
+工程要点：
 
 > 我把"能跑"的课程代码补成了"可验证"的工程：输出有 JSON schema、检索有透明
 > 排序、反思按需触发、评测有逐任务误差和配对 bootstrap，而且这些路径全部能在

@@ -30,3 +30,7 @@ prompt_trace*.jsonl
 .idea/
 .DS_Store
 Thumbs.db
+
+# Private interview notes; never publish.
+docs/INTERVIEW_GUIDE.md
+docs/INTERVIEW_NOTES.md
