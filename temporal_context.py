@@ -643,19 +643,55 @@ def run_temporal_ablation(
         agent_diagnostics["user_history_profile_source_row_indexes"] = [
             row["_temporal_source_row_index"] for row in context.history
         ]
-        if (
-            contract.generated_review_memory
-            and isinstance(prediction, dict)
-            and str(prediction.get("review", "")).strip()
-        ):
-            generated_entries_by_user[context._user_id].append({
-                "event_time": datetime.fromisoformat(context.target_timestamp),
-                "execution_order": context.execution_order,
-                "task_index": context.task_index,
-                "text": str(prediction["review"]),
-                "stars": prediction.get("stars"),
-                "item_id": context._item_id,
-            })
+        # Generated-memory carry-over requires an explicit, validated success
+        # status from the legacy workflow plus the safe quality flags. Parse
+        # fallbacks, snapped/invalid ratings, truncated reviews, injection or
+        # leakage warnings and any failed gate are never carried into the
+        # next task, so generic API-error text cannot poison memory. Missing
+        # flags fail closed.
+        memory_write = "disabled"
+        if contract.generated_review_memory:
+            quality_success = (
+                agent_diagnostics.get("quality_status") == "success"
+            )
+            safe_flags = (
+                agent_diagnostics.get("used_parse_fallback") is False
+                and agent_diagnostics.get("snapped_stars") is False
+                and agent_diagnostics.get("invalid_json_stars") is False
+                and agent_diagnostics.get("review_truncated") is False
+                and agent_diagnostics.get("injection_warning") is False
+                and agent_diagnostics.get("leakage_warning") is False
+                and agent_diagnostics.get("review_origin") == "model_output"
+            )
+            stars_value = (
+                prediction.get("stars") if isinstance(prediction, dict) else None
+            )
+            stars_valid = (
+                isinstance(stars_value, (int, float))
+                and not isinstance(stars_value, bool)
+                and math.isfinite(float(stars_value))
+                and 1.0 <= float(stars_value) <= 5.0
+                and float(stars_value) == float(int(float(stars_value)))
+            )
+            review_raw = (
+                prediction.get("review") if isinstance(prediction, dict) else None
+            )
+            review_text = (
+                review_raw.strip() if isinstance(review_raw, str) else ""
+            )
+            if quality_success and safe_flags and stars_valid and review_text:
+                generated_entries_by_user[context._user_id].append({
+                    "event_time": datetime.fromisoformat(context.target_timestamp),
+                    "execution_order": context.execution_order,
+                    "task_index": context.task_index,
+                    "text": review_text,
+                    "stars": float(stars_value),
+                    "item_id": context._item_id,
+                })
+                memory_write = "written"
+            else:
+                memory_write = "skipped_quality_gate"
+        agent_diagnostics["generated_memory_write"] = memory_write
         stats = context.trusted_history_stats
         records.append({
             "task_index": context.task_index,

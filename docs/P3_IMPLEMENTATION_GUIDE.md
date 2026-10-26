@@ -28,7 +28,7 @@ P3（本阶段）：
     demo_app.py        回环 HTTP 服务（stdlib）+ 执行投影 + CSV/报告数据 + CLI --check
     web_demo/          中文静态界面（index.html / app.js / styles.css）
     tests/test_demo_app.py  回环 HTTP 与场景合同测试（无外网）
-P2（并行开发中）：p2_evaluation/… 由独立会话负责；P3 不导入、不依赖。
+P2（未包含在本发布中）：p2_evaluation/ 不随本仓库发布；P3 不导入、不依赖。
 ```
 
 P3 只使用已验收 P1 的**稳定默认接口**：`run_reliable_suite`、`BudgetLedger`、
@@ -54,11 +54,11 @@ python demo_app.py --check
 四模式"），点击"运行合成演示"。页面**不会**发起任何外部请求（无 CDN、无字体、
 无图片外链）。
 
-测试（独立 basetemp，避免与并行的 P2 工作互相干扰）：
+测试（独立 basetemp，避免与其它本地运行互相干扰）：
 
 ```powershell
 python -m pytest tests/test_demo_app.py tests/test_demo_app_frontend.py -q `
-  --basetemp=C:\Users\Lenovo\AppData\Local\Temp\opencode\p3-revised-coder-20261010
+  --basetemp=.pytest_tmp\p3-demo
 ```
 
 `tests/test_demo_app_frontend.py` 使用 Node 内存 DOM stub 回归 JS 行为与移动端 CSS
@@ -194,7 +194,7 @@ post-run、详情 Combined、预算子页）由 main 复验。
 
 ## 8. P2 完成后的薄 UI 集成建议（不在本阶段实施）
 
-P2 评测模块经 main 独立验收后，可以在**不破坏现有边界**的前提下接入：
+P2 评测模块经独立验收后，可以在**不破坏现有边界**的前提下接入：
 
 1. 新增只读端点（如 `GET /api/p2/status`），仅返回验收后的聚合状态与版本；
    仍走同一 Host/Origin/CSRF/限流中间件；
@@ -227,3 +227,18 @@ P2 评测模块经 main 独立验收后，可以在**不破坏现有边界**的�
 - 连接级信号量先于线程创建，`handle_error` 安全日志，限流/连接配置硬上限；
 - 375px 移动端真收缩布局；tab 焦点保留 + Arrow/Home/End + roving tabindex；
 - 本地 favicon 消除 404；新增 Node DOM-stub 与 CSS 契约测试。
+
+## 11. 2026-10-18 恢复与可读性重做
+
+- `demo_app.py` 从会话原始 `read` + review `edit` 精确重建，63,689 bytes，
+  Git blob `19bec841a4d2536e6b879cc4d5bdf9e323c2408c` 与恢复 index 一致；
+  不是按报告重写。`demo_app.py --check` 通过，服务端测试 25 passed。
+- `tests/test_demo_app_frontend.py` 没有找到精确原 blob；现文件是面向新 UI
+  重新实现的测试，不是旧文件恢复。
+- `web_demo/` 按“概要 → Visualization → 分析 → 总结”重排：解释术语、四态卡片、
+  时间线、记忆漏斗、预算、四模式对比；总结固定显示“当前方案准确性：未实测”，
+  并列出真实 LLM、Prompt/检索、Memory 配对、新用户留出、真人盲评等后续项。
+- 独立环境：服务端 25 + 前端 4 = 29 passed；Chromium 375×812 / 1440×900
+  的 `cross_date_success` 与 `budget_stop` 无 console error、无页面级横向溢出。
+- 限制不变：所有数字来自 fake 合成运行，不是准确率、Memory 收益或真实用户泛化；
+  浏览器未覆盖全部场景和 Firefox/Safari。应用代码未提交或推送。

@@ -8,6 +8,7 @@ import hashlib
 import math
 import re
 from collections import Counter
+from dataclasses import dataclass
 import logging
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
@@ -142,6 +143,25 @@ class AgentOutput(BaseModel):
         if not cleaned:
             raise ValueError("review must not be empty")
         return cleaned
+
+
+@dataclass(frozen=True)
+class LegacyParseOutcome:
+    """Safe parse result for the legacy workflow.
+
+    ``invalid_json_stars`` marks a JSON star field that was the wrong type
+    (boolean/string/non-finite) and must never become a quiet success;
+    ``snapped`` marks an off-grid or out-of-range numeric rating that the
+    course-compatible contract normalizes; ``fallback_text`` marks a
+    completely defaulted review.
+    """
+
+    stars: float
+    review: str
+    used_fallback: bool
+    snapped: bool
+    fallback_text: bool
+    invalid_json_stars: bool
 
 
 def extract_json_payload(text: str):
@@ -700,13 +720,19 @@ class ReasoningWithQualityAwareness(ReasoningBase):
             "reflection_calls": 0,
             "reflection_skipped": 0,
             "last_reflection_reason": None,
+            "last_transport_failure": None,
         }
 
     def __call__(self, task_description: str, enable_reflection: bool = True):
         """
         两阶段推理：生成初稿 + 条件反思改进
         在生成过程中考虑useful/funny/cool特征
+
+        任何 LLM 调用异常都会记录 ``last_transport_failure``（draft/reflection）
+        并原样抛出，绝不吞掉异常返回错误文本或初稿；workflow 的异常分支会把
+        它转换成 failed 诊断，绝不写入记忆。
         """
+        self.stats["last_transport_failure"] = None
 
         # 第一阶段：生成初稿
         draft_prompt = f'''{task_description}
@@ -724,11 +750,15 @@ class ReasoningWithQualityAwareness(ReasoningBase):
 
         messages = [{"role": "user", "content": draft_prompt}]
         self.stats["draft_calls"] += 1
-        draft_result = self.llm(
-            messages=messages,
-            temperature=self.draft_temperature,
-            max_tokens=1500
-        )
+        try:
+            draft_result = self.llm(
+                messages=messages,
+                temperature=self.draft_temperature,
+                max_tokens=1500
+            )
+        except Exception:
+            self.stats["last_transport_failure"] = "draft"
+            raise
 
         if not enable_reflection:
             self.stats["reflection_skipped"] += 1
@@ -779,11 +809,15 @@ class ReasoningWithQualityAwareness(ReasoningBase):
 
         messages = [{"role": "user", "content": reflection_prompt}]
         self.stats["reflection_calls"] += 1
-        final_result = self.llm(
-            messages=messages,
-            temperature=self.reflection_temperature,
-            max_tokens=1500
-        )
+        try:
+            final_result = self.llm(
+                messages=messages,
+                temperature=self.reflection_temperature,
+                max_tokens=1500
+            )
+        except Exception:
+            self.stats["last_transport_failure"] = "reflection"
+            raise
 
         return final_result
 
@@ -875,21 +909,99 @@ class ImprovedSimulationAgent(SimulationAgent):
         self._last_prompt_reference_unknown_source_count = 0
         self._last_trusted_history_stats_included = False
 
-    @staticmethod
-    def parse_review_result_with_status(result: str):
-        """Parse LLM output into (stars, review, used_fallback).
+    def _diagnostics_template(self) -> dict:
+        """Complete safe diagnostics shape, including failure defaults.
 
-        Prefers the structured JSON contract and falls back to the legacy
-        "stars:/review:" label format.
+        The legacy ``workflow`` contract (``{"stars": ..., "review": ...}``)
+        is preserved for Simulator compatibility, so every return path must
+        still expose the full diagnostics key set. Failure defaults never
+        contain exception text, paths, prompts or identifiers, and
+        ``quality_status`` distinguishes reliable model output from legacy
+        fallbacks.
+        """
+        return {
+            "used_parse_fallback": False,
+            "skipped_injection_reviews": 0,
+            "injection_warning": False,
+            "leakage_warning": False,
+            "memory_enabled": bool(self.use_memory and self.memory_store),
+            "memory_backend": self.memory_backend,
+            "memory_candidate_count": 0,
+            "memory_recalled_count": 0,
+            "memory_recalled_sequences": [],
+            "memory_recalled_origin_orders": [],
+            "memory_prompt_entry_count": 0,
+            "memory_prompt_sequences": [],
+            "memory_prompt_included": False,
+            "memory_stored": False,
+            "memory_sequence": None,
+            "prompt_sha256": None,
+            "user_history_prompt_row_indexes": [],
+            "item_reference_prompt_row_indexes": [],
+            "user_history_prompt_unknown_source_count": 0,
+            "item_reference_prompt_unknown_source_count": 0,
+            "trusted_history_stats_included": False,
+            "review_length": 0,
+            "reflection_stats": dict(self.reasoning.stats),
+            "quality_status": "failed",
+            "reason": "internal_error",
+            "review_origin": "legacy_fallback",
+            "snapped_stars": False,
+            "invalid_json_stars": False,
+            "review_truncated": False,
+            "failure_stage": None,
+            "legacy_contract": True,
+        }
+
+    @staticmethod
+    def _parse_review_result_with_flags(result: str):
+        """Parse LLM output into a safe :class:`LegacyParseOutcome`.
+
+        The raw JSON star field is type-checked *before* Pydantic can coerce
+        it: booleans, strings and non-finite numbers are never canonicalized
+        into a success (the review text is preserved where possible, but the
+        rating becomes the legacy default and the outcome is flagged). The
+        legacy return contract is kept by
+        ``parse_review_result_with_status`` / ``parse_review_result``.
         """
         try:
             payload = extract_json_payload(result)
             if payload is not None:
-                try:
-                    output = AgentOutput(**payload)
-                    return output.stars, output.review, False
-                except (ValidationError, TypeError, ValueError) as exc:
-                    logging.warning("结构化输出校验失败，回退到标签解析: %s", exc)
+                raw_stars = payload.get("stars")
+                raw_review = payload.get("review")
+                star_type_problem = None
+                if isinstance(raw_stars, bool):
+                    star_type_problem = "boolean"
+                elif not isinstance(raw_stars, (int, float)):
+                    star_type_problem = "non_numeric"
+                elif not math.isfinite(float(raw_stars)):
+                    star_type_problem = "nonfinite"
+                if star_type_problem is None:
+                    snapped = float(raw_stars) not in VALID_STAR_VALUES
+                    try:
+                        output = AgentOutput(**payload)
+                        return LegacyParseOutcome(
+                            stars=output.stars,
+                            review=output.review,
+                            used_fallback=False,
+                            snapped=snapped,
+                            fallback_text=False,
+                            invalid_json_stars=False,
+                        )
+                    except (ValidationError, TypeError, ValueError):
+                        logging.warning("结构化输出校验失败，回退到标签解析")
+                else:
+                    # Invalid typed star: keep a usable review, never let the
+                    # coercion turn it into a quiet success.
+                    if isinstance(raw_review, str) and raw_review.strip():
+                        return LegacyParseOutcome(
+                            stars=3.0,
+                            review=raw_review.strip(),
+                            used_fallback=True,
+                            snapped=False,
+                            fallback_text=False,
+                            invalid_json_stars=True,
+                        )
 
             stars_match = STARS_PATTERN.search(result)
             stars = float(stars_match.group(1)) if stars_match else None
@@ -910,11 +1022,38 @@ class ImprovedSimulationAgent(SimulationAgent):
                 review_text = "不错的体验。"
                 used_fallback = True
 
-            return normalize_stars(stars), review_text, used_fallback
+            snapped = stars not in VALID_STAR_VALUES
+            return LegacyParseOutcome(
+                stars=normalize_stars(stars),
+                review=review_text,
+                used_fallback=used_fallback,
+                snapped=snapped,
+                fallback_text=False,
+                invalid_json_stars=False,
+            )
 
-        except Exception as e:
-            logging.error('解析错误: %s', e)
-            return 3.0, "一般的体验。", True
+        except Exception:
+            # Safe category only: never log the payload, review text or
+            # exception details, which may contain private markers.
+            logging.error("解析错误: internal_parse_error")
+            return LegacyParseOutcome(
+                stars=3.0,
+                review="一般的体验。",
+                used_fallback=True,
+                snapped=True,
+                fallback_text=True,
+                invalid_json_stars=False,
+            )
+
+    @staticmethod
+    def parse_review_result_with_status(result: str):
+        """Parse LLM output into (stars, review, used_fallback).
+
+        Prefers the structured JSON contract and falls back to the legacy
+        "stars:/review:" label format.
+        """
+        outcome = ImprovedSimulationAgent._parse_review_result_with_flags(result)
+        return outcome.stars, outcome.review, outcome.used_fallback
 
     def parse_review_result(self, result: str):
         """Backward-compatible wrapper returning (stars, review_text)."""
@@ -1353,7 +1492,7 @@ class ImprovedSimulationAgent(SimulationAgent):
             dict: {"stars": float, "review": str}
         """
         try:
-            self.last_diagnostics = {}
+            self.last_diagnostics = self._diagnostics_template()
             self._last_memory_recalled_count = 0
             self._last_memory_stored = False
             self._last_memory_sequence = None
@@ -1417,13 +1556,18 @@ class ImprovedSimulationAgent(SimulationAgent):
                 enable_reflection=self.enable_reflection
             )
 
-            # 解析结果
-            stars, review_text, used_fallback = (
-                self.parse_review_result_with_status(result)
-            )
+            # 解析结果：区分结构化成功、标签解析回退与强制默认文本
+            outcome = self._parse_review_result_with_flags(result)
+            stars = outcome.stars
+            review_text = outcome.review
+            used_fallback = outcome.used_fallback
+            snapped_stars = outcome.snapped
+            fallback_text = outcome.fallback_text
+            invalid_json_stars = outcome.invalid_json_stars
 
-            # 后处理
-            if len(review_text) > 512:
+            # 后处理：截断保留课程兼容形状，但明确标记 degraded 且不写记忆。
+            review_truncated = len(review_text) > 512
+            if review_truncated:
                 review_text = review_text[:509] + "..."
                 logging.warning("评论被截断到512字符")
 
@@ -1438,7 +1582,40 @@ class ImprovedSimulationAgent(SimulationAgent):
             if leakage_warning:
                 logging.warning("生成评论与参考评论重合度过高，可能存在复制")
 
-            if self.use_memory and self.memory_store:
+            # 旧入口的质量判定：只有完全无回退/无告警的结果才算 success；
+            # 其余结果仍然返回课程兼容的 stars/review 形状，但被明确标记为
+            # legacy 回退，绝不写入记忆，也不应被当作可靠预测。
+            if fallback_text:
+                quality_status = "degraded"
+                quality_reason = "legacy_parse_fallback"
+            elif invalid_json_stars:
+                quality_status = "degraded"
+                quality_reason = "legacy_invalid_json_stars"
+            elif used_fallback:
+                quality_status = "degraded"
+                quality_reason = "legacy_parse_fallback"
+            elif snapped_stars:
+                quality_status = "degraded"
+                quality_reason = "legacy_stars_snapped"
+            elif review_truncated:
+                quality_status = "degraded"
+                quality_reason = "legacy_review_truncated"
+            elif injection_warning:
+                quality_status = "degraded"
+                quality_reason = "generated_injection_pattern"
+            elif leakage_warning:
+                quality_status = "degraded"
+                quality_reason = "reference_overlap"
+            else:
+                quality_status = "success"
+                quality_reason = "legacy_validated_output"
+
+            # 记忆写入闸门：仅当最终质量状态为 success 时写一次。
+            if (
+                self.use_memory
+                and self.memory_store
+                and quality_status == "success"
+            ):
                 try:
                     entry = self.memory_store.remember(
                         self.task.get('user_id'),
@@ -1457,8 +1634,11 @@ class ImprovedSimulationAgent(SimulationAgent):
                 except ValueError:
                     logging.warning("无法保存本次实验内的用户记忆")
 
-            self.last_diagnostics = {
+            diagnostics = self._diagnostics_template()
+            diagnostics.update({
                 "used_parse_fallback": used_fallback,
+                "invalid_json_stars": invalid_json_stars,
+                "review_truncated": review_truncated,
                 "skipped_injection_reviews": skipped_injections,
                 "injection_warning": injection_warning,
                 "leakage_warning": leakage_warning,
@@ -1501,7 +1681,21 @@ class ImprovedSimulationAgent(SimulationAgent):
                 ),
                 "review_length": len(review_text),
                 "reflection_stats": dict(self.reasoning.stats),
-            }
+                "quality_status": quality_status,
+                "reason": quality_reason,
+                "review_origin": (
+                    "legacy_fallback"
+                    if (
+                        fallback_text or used_fallback or invalid_json_stars
+                        or review_truncated
+                    )
+                    else "model_output"
+                ),
+                "snapped_stars": snapped_stars,
+                "failure_stage": None,
+                "legacy_contract": True,
+            })
+            self.last_diagnostics = diagnostics
 
             logging.info(f"评论生成完成：{stars}星，长度{len(review_text)}字符")
 
@@ -1511,8 +1705,24 @@ class ImprovedSimulationAgent(SimulationAgent):
                 "review": review_text
             }
 
-        except Exception as e:
-            logging.error(f"Workflow错误: {e}", exc_info=True)
+        except Exception:
+            # Safe failure diagnostics only: no exception text, traceback,
+            # paths, prompts or identifiers. Memory is never written. A
+            # tracked transport failure (draft/reflection) keeps its stage.
+            self._last_memory_stored = False
+            self._last_memory_sequence = None
+            transport_stage = self.reasoning.stats.get(
+                "last_transport_failure"
+            )
+            failure = self._diagnostics_template()
+            failure["quality_status"] = "failed"
+            failure["reason"] = (
+                "llm_transport_error" if transport_stage else "internal_error"
+            )
+            failure["review_origin"] = "legacy_fallback"
+            failure["failure_stage"] = transport_stage
+            self.last_diagnostics = failure
+            logging.error("Workflow失败: internal_error")
             return {
                 "stars": 3.0,
                 "review": "一般的体验。"

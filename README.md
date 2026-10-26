@@ -50,7 +50,7 @@ LLM 初稿 -> 校验 -> 必要时最多修复一次
 项目 B：独立评分与诊断
 ```
 
-关键在于模型**拿不到**什么：未来评论、目标评分、其他用户的历史。启用 Memory 时，也只召回同一用户更早生成的记录，并且只作为表达风格参考，不能当作可信评分标签。
+关键在边界：用户个人历史只取当前用户更早的记录；目标评分、未来评论和已知目标文本副本不会进入上下文。同商品参考评论可以来自其他用户的安全历史，但不包含目标行、未来行或目标文本副本。启用 Memory 时，只召回同一用户更早生成的记录，并只作为表达风格参考，不能当作可信评分标签。
 
 这套设置可以回答这些问题：
 
@@ -64,17 +64,17 @@ LLM 初稿 -> 校验 -> 必要时最多修复一次
 **已经能用**
 
 - 保留原 AgentSociety 课程链路：用户画像、参考评论排序、条件反思／修复，以及课程评测入口。
-- 本地核验过 Amazon 乐器数据：10,261 条评论、400 个目标任务和四种固定统计基线。数据只留在本地，不再分发。
+- 本地核验过 Amazon 乐器数据：10,261 条评论、400 个目标任务和四种固定统计基线。数据只留在本地，不再分发；这是 2014 年固定研究数据协议，不是“2026 最新数据”。
 - 新增的可靠工作流有离线测试覆盖：受限证据、四种结果状态、最多一次修复、调用预算，以及只在成功时写 Memory。
-- 版本化的 `simulation_run.v1` 结果契约和本地合成导出入口，已经和评测项目做过独立检查。应用代码**还没有发布到公开 `main`**。
-- 本地做过一个合成浏览器 Demo，用 fake 数据和模型输出测试过。它不是在线服务，也不在当前公开部署里。
+- 版本化的 `simulation_run.v1` 结果契约、本地 synthetic/prepared fake 导出入口和独立校验入口已整理进当前发布候选；正式发布前不称已发布。
+- 本地合成浏览器 Demo 的代码已包含在仓库中，可用 `python demo_app.py --check` 自检。它不是在线服务，也不接真实模型。
 
 **还没有完成**
 
 - 没有跑新版真实 LLM 评测，所以目前没有新的准确率、风格、成本或延迟成绩。
 - 没有做真人风格评审，也没有评“评分和评论是否一致”。
 - Memory 只在单次运行内有效，重启就没了，也没有测出收益。
-- 公开仓库和本地开发目录不是同一个快照。本地能跑的命令，fresh clone 不一定有。
+- 当前是开源代码候选，不是在线服务；没有真实用户泛化或生产可用性结论。
 
 一句话：**工程骨架和离线检查是真的；但“模拟得准不准、够不够个性化”还没有证据。**
 
@@ -87,34 +87,56 @@ LLM 初稿 -> 校验 -> 必要时最多修复一次
 需要 Python 3.10 或更新版本。
 
 ```powershell
-python -m pip install -r requirements.txt
+# 运行测试、lint 和离线 smoke：安装开发依赖（含 pytest/ruff）
+python -m pip install -r requirements-dev.txt
 python -m pytest -q
+python -m ruff check .
 ```
 
-上游框架从 PyPI 安装，没有复制进本仓库。API key 放在本地 `.env` 或环境变量里，不要提交到仓库。
+`requirements.txt` 是运行真实课程链路时使用的依赖（包含 `websocietysimulator`）；只跑离线测试和 fake/契约路径时用 `requirements-dev.txt` 就够了。上游框架从 PyPI 安装，没有复制进本仓库。API key 放在本地 `.env` 或环境变量里，不要提交到仓库。
+
+公开测试只使用 synthetic fixture，不读取真实评论、目标标签或 per-task 结果，也不访问模型 API。
 
 ### 运行本地的结果契约预览
 
-下面的命令属于本地开发目录，不属于当前公开 `main`：
+以下命令在 fresh clone 的仓库根目录可运行：
 
 ```powershell
 python -m user_simulator_project --dry-run
 python -m user_simulator_project --synthetic --max-tasks 3 --output-dir results/stage1_demo
 ```
 
-输出目录必须是全新的，并且位于仓库里被忽略的 `results/` 或 `Dataset/` 目录下。导出器会先写临时文件、校验，再以不覆盖的方式发布；已有文件不会被替换。本地目录可用时，在项目 B 里验证：
+输出目录必须是全新的，并且位于仓库里被忽略的 `results/` 或 `Dataset/` 目录下。导出器会先写临时文件、校验，再以不覆盖的方式发布；已有文件不会被替换。
+
+若本机同时有项目 B，验证命令要在 **B 的 checkout** 里运行。A 的 fresh clone 根目录没有 `amazon_eval_agent` 包，直接 `python -m amazon_eval_agent` 不能 import 兄弟仓库：
 
 ```powershell
-python -m amazon_eval_agent validate --input "<绝对路径>/simulation_run.v1.json" --json
+# 先切到 B 的仓库，不要留在 A 根目录
+$BRepo = "C:\path\to\amazon-instruments-evaluation-agent"
+$Artifact = "C:\path\to\A\results\stage1_demo\simulation_run.v1.json"
+Set-Location $BRepo
+python -m amazon_eval_agent validate --input $Artifact --json
 ```
 
-退出码 `0` 只表示结果文件符合契约，不代表预测准确。
+如果 B 使用独立 venv，也可以显式调用 B 的解释器：
+
+```powershell
+& "$BRepo\.venv\Scripts\python.exe" -m amazon_eval_agent validate --input $Artifact --json
+```
+
+退出码 `0` 只表示结果文件符合契约，不代表预测准确。没有 B sibling 时，跨仓契约测试会显式 skip。
 
 ### 运行 Demo
 
-公开仓库没有在线用户模拟 Demo。开发时做过一个本地合成 Demo，但当前公开的 `main` 快照里缺少部分文件。在文件补齐并重新发布之前，不要把它说成已经上线的产品。
+```powershell
+# 离线自检：场景合同 + 回环 HTTP，自检后退出
+python demo_app.py --check
 
-如果本地要起 Demo 服务，只绑定 `127.0.0.1`，不要暴露到公网。Demo 只用合成内容和 fake 模型输出，不能接真实评论或目标标签。
+# 本地合成 Demo，仅绑定回环地址
+python demo_app.py --host 127.0.0.1 --port 8290
+```
+
+浏览器打开 `http://127.0.0.1:8290/`。Demo 只用合成内容和 fake 模型输出，不接真实评论或目标标签，也不会发起外部请求。它只绑定 `127.0.0.1` / `::1`，不要暴露到公网。
 
 ### 不该做什么
 
@@ -125,6 +147,7 @@ python -m amazon_eval_agent validate --input "<绝对路径>/simulation_run.v1.j
 ## 5. 继续阅读
 
 - [数据集选择与许可说明](docs/DATASETS.md)
+- [架构、模块职责与标签边界](docs/ARCHITECTURE.md)
 - [能力、指标、幻觉检查与 Memory](docs/AGENT_CAPABILITIES.md)
 - [分步开发计划与验收标准](docs/DEVELOPMENT_PLAN.md)
 - [P0 数据协议](docs/P0_IMPLEMENTATION_GUIDE.md) / [P1 可靠工作流](docs/P1_IMPLEMENTATION_GUIDE.md) / [合成 Demo](docs/P3_IMPLEMENTATION_GUIDE.md)

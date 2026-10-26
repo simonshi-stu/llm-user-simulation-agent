@@ -1,5 +1,8 @@
 # 项目构造指南
 
+> 当前发布候选新增了 P0、P1、阶段1导出和本地 Demo。新模块、标签边界和运行入口
+> 见 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)；本文件保留原课程路径的详细说明。
+
 本文件面向"全面理解这个仓库"：结构、数据流、模块职责、产物格式、运行方式、
 测试策略、已修 bug、诚实边界和扩展点。代码与注释为英文，说明为中文。
 
@@ -25,7 +28,7 @@ llm-user-simulation-agent/
 ├─ inspect_agent_output.py          # 单任务人工观察工具（未 CLI 化）
 ├─ final_project.ipynb              # 课程实验 Notebook（历史执行记录，勿改）
 ├─ ablation_results_*_clean.json    # Yelp / Amazon / Goodreads 历史结果快照
-├─ tests/                           # 181 个离线测试（不装框架、不联网）
+├─ tests/                           # 离线测试（入口与覆盖见 docs/ARCHITECTURE.md）
 │  ├─ fakes.py                      # FakeLLM / FakeInteractionTool / make_review
 │  ├─ test_agent_workflow_offline.py# workflow 端到端
 │  ├─ test_agent_offline.py         # 画像、质量阈值、参考选择、解析与归一
@@ -44,13 +47,13 @@ llm-user-simulation-agent/
 │  ├─ DEVLOG.md                     # 逐步开发记录（学习/讲解材料）
 │  ├─ PROJECT_GUIDE.md              # 本文件
 │  ├─ SYNTHETIC_MEMORY_ABLATION.md  # 重复用户 Memory 验证记录
-│  ├─ INTERVIEW_GUIDE.md            # 面试问答材料
+│  ├─ ARCHITECTURE.md               # 当前发布候选的架构、职责与标签边界
 │  └─ MEMORY_EVALUATION_AUDIT_2026-09.md # 数据限制、实测边界与实验协议
 ├─ requirements.txt                 # 运行时依赖（框架、numpy、requests、pydantic）
 ├─ requirements-dev.txt             # 离线测试所需（不含框架）
 ├─ pytest.ini                       # testpaths / pythonpath / basetemp 在项目内
 ├─ ruff.toml                        # lint 配置（排除 .venv、.pytest_tmp、notebook）
-├─ .github/workflows/ci.yml         # CI：ruff + pytest + dry-run smoke
+├─ .github/workflows/ci.yml         # CI：lint + 离线测试 + dry-run + Demo + synthetic export
 └─ .env.example / README.md / LICENSE / THIRD_PARTY_NOTICES.md
 ```
 

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <title>LLM 用户模拟 Agent · 本地合成演示</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#results">跳到演示结果</a>
+
+  <header class="topbar">
+    <div class="topbar-text">
+      <h1>LLM 用户模拟 Agent · 本地合成演示</h1>
+      <p class="subtitle">9 个固定场景 × 4 种模式 · 本地假模型 · 不联网 · 不调用真实 LLM</p>
+    </div>
+    <div class="badges">
+      <span class="badge badge-sim" id="badge-sim">SIMULATED · 全部为合成示例</span>
+      <span class="badge badge-conn" id="server-status" role="status">正在连接本地演示服务…</span>
+    </div>
+  </header>
+
+  <section class="intro" aria-labelledby="h-intro">
+    <div class="intro-head">
+      <p class="eyebrow">先看这里</p>
+      <h2 id="h-intro">这个 Demo 是什么，为什么需要它</h2>
+    </div>
+    <div class="intro-grid">
+      <article>
+        <h3>这个 Demo 是什么</h3>
+        <p>它在本机模拟一个“用户模拟 Agent”：先读取用户过去写过什么、商品是什么，再决定哪些历史值得放进提示词，最后生成一条合成评论并检查格式。所有用户、商品和评论都是手写的合成数据。</p>
+      </article>
+      <article>
+        <h3>为什么需要</h3>
+        <p>真实用户历史、真实模型调用和人工评分都昂贵，也不适合放进公开演示。先用可重复的合成数据把“读证据 → 调模型 → 严格校验 → 预算不够就停”的流程和安全边界跑通，才有资格谈真实评测。</p>
+      </article>
+      <article>
+        <h3>这次只演示什么</h3>
+        <p>只演示 9 个固定场景和 4 种记忆/统计组合能否按预期合同运行。它证明流程、边界和错误处理能工作；<strong>不证明</strong>模型准、记忆有效，或真实用户会喜欢。</p>
+      </article>
+    </div>
+    <p class="plain-note">
+      <strong>一句话解释几个术语：</strong>
+      “记忆”是把之前成功的表达风格记下来，只作参考，不作为评分依据；
+      “降级”是模型或预算不够时只给一个简单的统计参考值，不假装是模型输出；
+      “拒绝”是证据或预算不足时明确不出结果，不编造；
+      “fake”是本地脚本假模型，不联网、不调用真实 LLM。
+    </p>
+  </section>
+
+  <main class="layout">
+    <aside class="panel controls" aria-label="演示控制区">
+      <section aria-labelledby="h-scenario">
+        <p class="step-label">第 1 步</p>
+        <h2 id="h-scenario">选择一个合成场景</h2>
+        <label for="scenario-select">场景（固定枚举，不能自由输入）</label>
+        <select id="scenario-select" aria-describedby="scenario-desc" disabled>
+          <option value="">加载中…</option>
+        </select>
+        <p id="scenario-desc" class="hint">正在读取本地演示服务…</p>
+      </section>
+
+      <section aria-labelledby="h-mode">
+        <p class="step-label">第 2 步</p>
+        <h2 id="h-mode">选择对比方式</h2>
+        <fieldset id="mode-fieldset" disabled>
+          <legend class="sr-only">四种模式或全部模式</legend>
+          <div id="mode-list" class="mode-list">
+            <p class="hint">加载中…</p>
+          </div>
+        </fieldset>
+        <p class="hint">
+          四种模式使用完全相同的上下文，只切换“生成记忆”和“可信历史统计”两个开关。
+          默认对比全部四模式，看差异从哪里来。
+        </p>
+      </section>
+
+      <section aria-labelledby="h-run">
+        <p class="step-label">第 3 步</p>
+        <h2 id="h-run">运行演示</h2>
+        <button id="run-button" type="button" disabled>运行合成演示</button>
+        <p class="hint">
+          只在本机回环地址运行，不保存运行产物。下载报告由浏览器根据已返回的脱敏数据现场生成。
+        </p>
+      </section>
+
+      <section aria-labelledby="h-p2" class="p2-panel">
+        <h2 id="h-p2">独立评测项目 B</h2>
+        <p><strong id="p2-status">合成 Demo 已上线</strong></p>
+        <p id="p2-real-llm">真实指标未测</p>
+        <p class="hint" id="p2-note">
+          项目 B 负责真实 LLM 小规模评测，尚未接入本页。这里不展示 RMSE、准确率或“记忆提升率”，
+          也不把合成 Demo 说成真实评测已经完成。
+        </p>
+      </section>
+
+      <section aria-labelledby="h-safety" class="safety-panel">
+        <h2 id="h-safety">安全边界（演示级）</h2>
+        <ul id="safety-list" class="tight-list">
+          <li>仅回环地址 127.0.0.1 / ::1，拒绝外部绑定。</li>
+          <li>运行接口只接受固定场景与模式枚举。</li>
+          <li>响应只含脱敏聚合与合成数据形状。</li>
+        </ul>
+      </section>
+    </aside>
+
+    <section class="results" id="results" aria-label="演示结果">
+      <div id="status-region" class="status-region" role="status" aria-live="polite">
+        尚未运行。选择场景和对比方式，然后点击“运行合成演示”。
+      </div>
+      <div id="error-region" class="error-region" role="alert" hidden></div>
+
+      <div id="empty-state" class="empty-state">
+        <h2>结果会按四块展示</h2>
+        <ol class="reading-guide">
+          <li><strong>概要：</strong>这次跑了什么、样本是什么、为什么不能当真实结论。</li>
+          <li><strong>Visualization：</strong>四态、时间线、记忆漏斗、预算和四模式对比。</li>
+          <li><strong>分析：</strong>这些数字说明什么，以及明确不能说明什么。</li>
+          <li><strong>总结：</strong>准确性仍是“未实测”，列出已验证的工程能力和后续评测计划。</li>
+        </ol>
+        <p class="hint">运行前页面不会发起任何外部请求。所有示例均为合成数据。</p>
+      </div>
+
+      <div id="results-body" hidden>
+        <section class="card" id="overview-card" aria-labelledby="h-run-summary">
+          <div class="card-head">
+            <div>
+              <p class="eyebrow">概要</p>
+              <h2 id="h-run-summary">这次运行了什么</h2>
+            </div>
+            <span class="badge badge-sim">SIMULATED · 非真实用户</span>
+          </div>
+          <p id="overview-lead" class="lead"></p>
+          <dl class="kv" id="run-summary"></dl>
+          <p class="hint" id="privacy-note"></p>
+        </section>
+
+        <section class="results-section" id="visualization" aria-labelledby="h-visualization">
+          <div class="section-head">
+            <p class="eyebrow">Visualization</p>
+            <h2 id="h-visualization">把流程和数字放在一张图里看</h2>
+            <p>下面的每个数字都来自本次运行返回的脱敏数据，不是预先写死的插图。</p>
+          </div>
+
+          <section class="card" id="state-card" aria-labelledby="h-states">
+            <div class="card-head">
+              <h2 id="h-states">四态结果：成功、降级、拒绝、失败</h2>
+              <span class="hint" id="state-strip-note"></span>
+            </div>
+            <div class="state-grid" id="state-strip">
+              <div class="state-tile state-success">
+                <span class="state-name">成功</span>
+                <strong id="state-success-count">—</strong>
+                <span class="state-meaning">严格校验通过，给出结果</span>
+              </div>
+              <div class="state-tile state-degraded">
+                <span class="state-name">降级</span>
+                <strong id="state-degraded-count">—</strong>
+                <span class="state-meaning">预算或模型不足，只给统计参考值</span>
+              </div>
+              <div class="state-tile state-refused">
+                <span class="state-name">拒绝</span>
+                <strong id="state-refused-count">—</strong>
+                <span class="state-meaning">证据或预算不足，明确不出结果</span>
+              </div>
+              <div class="state-tile state-failed">
+                <span class="state-name">失败</span>
+                <strong id="state-failed-count">—</strong>
+                <span class="state-meaning">调用或协议失败，不伪造成功</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card" id="timeline-card" aria-labelledby="h-timeline">
+            <h2 id="h-timeline">时间线：任务按执行顺序发生</h2>
+            <p class="hint">跨日期、同日隔离、用户隔离和预算停止都在这里体现。状态颜色与上面的四态一致。</p>
+            <ol id="timeline" class="timeline"></ol>
+          </section>
+
+          <section class="card" id="task-card" aria-labelledby="h-task">
+            <div class="card-head">
+              <div>
+                <h2 id="h-task">任务详情：证据、记忆和预算</h2>
+                <p class="hint">先用任务标签选择任务，再用子页切换“证据 / 记忆 / 预算”。</p>
+              </div>
+              <div class="inline-control">
+                <label for="detail-mode-select">详情模式</label>
+                <select id="detail-mode-select"></select>
+              </div>
+            </div>
+            <div id="task-tabs" class="task-tabs" role="tablist" aria-label="任务选择"></div>
+            <div id="task-panel" class="task-panel" role="tabpanel" tabindex="0"></div>
+          </section>
+
+          <section class="card" id="compare-card" aria-labelledby="h-compare">
+            <h2 id="h-compare">四模式对比：同一上下文，只换两个开关</h2>
+            <p id="compare-note" class="hint"></p>
+            <div class="table-wrap">
+              <table id="compare-table" aria-label="四模式对比表"></table>
+            </div>
+          </section>
+
+          <section class="card" id="stats-card" aria-labelledby="h-stats">
+            <h2 id="h-stats">当前模式的运行级数字</h2>
+            <div id="stats-panel"></div>
+          </section>
+        </section>
+
+        <section class="card" id="analysis" aria-labelledby="h-analysis">
+          <div class="card-head">
+            <div>
+              <p class="eyebrow">分析</p>
+              <h2 id="h-analysis">这些数字说明什么，不能说明什么</h2>
+            </div>
+          </div>
+          <div class="analysis-grid">
+            <div class="analysis-box analysis-ok">
+              <h3>能说明什么</h3>
+              <ul id="analysis-facts"></ul>
+            </div>
+            <div class="analysis-box analysis-limit">
+              <h3>不能说明什么</h3>
+              <ul id="analysis-limits"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="card" id="summary" aria-labelledby="h-summary">
+          <div class="card-head">
+            <div>
+              <p class="eyebrow">总结</p>
+              <h2 id="h-summary">当前结论与下一步</h2>
+            </div>
+          </div>
+          <div class="accuracy-flag">
+            <span>当前方案准确性</span>
+            <strong id="summary-accuracy">未实测</strong>
+            <p>没有调用真实 LLM，也没有真人评审。这里不会出现伪造的 RMSE、准确率或提升率。</p>
+          </div>
+          <div class="summary-grid">
+            <div class="summary-box">
+              <h3>这次已经验证的工程能力</h3>
+              <ul id="summary-engineering"></ul>
+            </div>
+            <div class="summary-box">
+              <h3>后续 improvement</h3>
+              <ul id="summary-improvements">
+                <li>用真实 LLM 做小规模固定场景评测，记录版本、成本与失败率。</li>
+                <li>做 Prompt / 检索策略对照，而不是只看一条样例。</li>
+                <li>做 Memory 开 / 关配对比较，并报告不确定性。</li>
+                <li>加入新用户留出集，检查是否能泛化到没见过的用户。</li>
+                <li>请真人做盲评，并报告评审一致性；在此之前不宣称准确率。</li>
+              </ul>
+            </div>
+            <div class="summary-box summary-b">
+              <h3>独立评测项目 B</h3>
+              <p><strong id="summary-b-status">合成 Demo 已上线；真实指标未测。</strong></p>
+              <p class="hint">
+                B 项目与这个合成 Demo 分开验收。未完成前，本页继续把真实指标标为“未实测”，
+                不把占位内容包装成已完成结果。
+              </p>
+            </div>
+          </div>
+
+          <section class="download-box" aria-labelledby="h-download">
+            <h3 id="h-download">下载脱敏报告</h3>
+            <p class="hint">
+              报告只包含页面已展示的聚合数字和合成数据形状，不含评论原文、GT、prompt 原文、
+              真实数据、密钥或文件路径。报告在浏览器本地生成，服务器不保存产物。
+            </p>
+            <button id="download-button" type="button" disabled>下载脱敏 JSON 报告</button>
+          </section>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>本地合成演示 · 无第三方 CDN / 字体 / 外部图片 · 所有用户、商品和评论均为手写示例。</p>
+    <p id="footer-run-info">运行后会显示合成会话与 run hash；它们不是真实用户 ID。</p>
+  </footer>
+
+  <noscript>
+    <p class="error-region">此演示需要启用 JavaScript。脚本只有本地 /app.js，没有外部依赖。</p>
+  </noscript>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
