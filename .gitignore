@@ -25,6 +25,15 @@ memory_audit*.json
 prompt_trace*.json
 prompt_trace*.jsonl
 
+# Raw sources and private Drive/Colab run artifacts.
+*.ipynb
+*.jsonl
+ablation_results_*.json
+amazon_raw_full_temporal_v2_*/
+reviews_Musical_Instruments_5*
+Musical_Instruments.*
+meta_Musical_Instruments.*
+
 # Local editor and OS files.
 .vscode/
 .idea/

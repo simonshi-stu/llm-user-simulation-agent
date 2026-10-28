@@ -8,8 +8,8 @@ This is not a bot for posting reviews, and it does not claim to know what the re
 
 ## 0. Credits and acknowledgements
 
-- **[AgentSociety](https://github.com/tsinghua-fib-lab/AgentSociety)** (FIB Lab, Tsinghua University). The wider research platform for LLM-based social simulation. This repository does not vendor AgentSociety itself.
-- **[AgentSocietyChallenge](https://github.com/tsinghua-fib-lab/AgentSocietyChallenge)** (FIB Lab, Tsinghua University, MIT License). The direct simulation dependency: the project installs its PyPI package, `websocietysimulator==1.0.0a30`, which provides the simulation environment, agent base classes, task interaction tools, and framework evaluation interfaces.
+- **[AgentSociety](https://github.com/tsinghua-fib-lab/AgentSociety)** (FIB Lab, Tsinghua University). This project explicitly acknowledges and follows its LLM social-simulation research context; AgentSociety itself is not vendored here.
+- **[AgentSocietyChallenge](https://github.com/tsinghua-fib-lab/AgentSocietyChallenge)** (FIB Lab, Tsinghua University, MIT License). The direct framework called by the earlier Agent A course pipeline: the project installs `websocietysimulator==1.0.0a30` from PyPI for the simulation environment, agent base classes, task interaction tools, and framework evaluation interfaces.
 - **Amazon Product Data (2014), Musical Instruments 5-core reviews**, maintained by Julian McAuley's group at UC San Diego. The dataset page is [here](https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html). Raw reviews, target labels, and private run files are not distributed in this repository. Public availability does not settle redistribution or commercial-use rights.
 - **[Project B: Amazon review evaluation and diagnostics](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)**. The independent evaluation side of this work.
 
@@ -61,24 +61,43 @@ Concrete questions this setup can support:
 
 ## 3. Current progress
 
-**Working today**
+**Included in this public snapshot**
 
-- The original AgentSociety-based course pipeline is kept: profiling, reference ranking, reflection/repair, and the course evaluation entry point.
-- A local Amazon Musical Instruments dataset has been audited: 10,261 reviews, 400 target tasks, and four fixed statistical baselines. The data stays local and is not redistributed.
-- A newer reliable workflow has offline coverage for bounded evidence, four result states, at most one repair, call budgets, and success-only memory writes.
-- A versioned `simulation_run.v1` result contract and a local synthetic export entry point were independently checked against the evaluation project. The application code is **not yet published on the public `main` branch**.
-- A synthetic browser demo was built and tested locally with fake data. It is not a live service and is not part of the current public deployment.
+- The AgentSocietyChallenge pipeline is kept: profiling, reference ranking, reflection/repair, and the course evaluation entry point.
+- Agent A's reliable generation-side code is published: `improved_agent_with_quality.py`, `temporal_context.py`, `comprehensive_evaluation.py`, `local_memory.py`, and privacy-audit tooling.
+- The Amazon Musical Instruments adapter and time-safe runner are published: `amazon_p0.py`, `amazon_full_evaluation.py`, and `rating_baselines.py`. They support legacy/new fields and second, millisecond, microsecond, and nanosecond timestamps, with explicit per-row status categories.
+- A source-only dry-run was verified against the raw source in Drive/Colab: `3,017,439` rows parsed, `3,017,381` valid, and `58` explicitly rejected as `invalid_timestamp`; valid dates were `2001-09-17` through `2023-09-12`. Raw data was not copied into the repository.
+- Offline validation covers transport-failure isolation, parsing states, temporal safety, the Memory gate, rating baselines, and privacy boundaries; these checks are not evidence of real-model quality.
+- The offline suite passed `186` tests on the 2026-10-28 public snapshot; no real model was called.
 
 **Not finished yet**
 
-- No new real-LLM benchmark has been run, so there is no current accuracy, style, cost, or latency score.
+- The current GPT-5.6 Luna full LLM evaluation has not been completed, so there is no new accuracy, style, cost, or latency score.
+- The earlier partial DeepSeek run was stopped and is not a complete benchmark result; future full evaluation will not use DeepSeek.
 - Human review of style and rating-review consistency has not been performed.
 - Memory is in-run only; it does not survive a restart and has not shown a measured benefit.
-- The public repository and the local development tree are not the same snapshot. A command that exists locally may not exist in a fresh clone.
+- The public repository publishes the generation side; the independent evaluation side remains in [Project B](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent).
 
-The short version: **the engineering skeleton and offline checks are real; the evidence that the simulation is accurate or personalised is still missing.**
+The short version: **source parsing and offline engineering checks have reproducible results; current-model full-quality evidence is still missing.**
 
-## 4. How to use it
+## 4. Current development path and A/B consolidation scope
+
+The development workspace was validated as one context containing:
+
+- **A, generation:** user profiling, reference reviews, conditional reflection/repair, in-run Memory, temporal-safe context, the Amazon source adapter, and four deterministic rating baselines.
+- **B, evaluation:** an independent result contract, rating/coverage/failure diagnostics, evidence-constrained checks, and export acceptance. B's code and Git history remain in its separate repository.
+- **Public boundary:** only versioned predictions and diagnostics cross the boundary; target labels, prompts, raw reviews, and per-record private outputs do not.
+
+This publication is a **reviewed source-snapshot consolidation, not a merge of the two repositories' Git histories**. This repository publishes the A side and public documentation; Project B does not become part of this repository because the development workspace combined the acceptance context.
+
+The next path is:
+
+1. Done: field/time normalization, source-only full-source parsing verification, offline safety tests, and public documentation.
+2. Tomorrow: obtain a private batch path for the current GPT-5.6 Luna model, fix the max/Absolute configuration, budget, data-transfer permission, and stop conditions; do not call the real model before that path exists.
+3. Run the batch evaluation with raw data, labels, prompts, model outputs, and per-record results kept only in Drive/Colab; publish only de-identified aggregate status.
+4. Send the result to Project B for independent scoring and diagnosis, then run same-task Memory pairing; do not report a benefit without denominators and coverage.
+
+## 5. How to use it
 
 There is **no plugin and no hosted backend**. This is a Python project that runs locally (or in a notebook/Colab session). It needs an LLM client for real generation, but the test and contract paths use fakes and need no API key.
 
@@ -93,9 +112,19 @@ python -m pytest -q
 
 The upstream framework is installed from PyPI; it is not vendored in this repository. Keep API keys in a local `.env` or environment variable, never in the repository.
 
+### Run the published source-only preview
+
+The raw source must remain in a controlled Drive/Colab staging directory. This command does not call an LLM or copy the source into the repository:
+
+```powershell
+python amazon_full_evaluation.py --raw-root "<Drive/Colab raw-root>" --dry-run
+```
+
+There is no public full-model command yet; it awaits the private current-model batch interface and approved configuration.
+
 ### Run the local result-contract preview
 
-These commands belong to the local development tree, not the current public `main`:
+These commands belong to the wider local development workspace, not the current public `main`:
 
 ```powershell
 python -m user_simulator_project --dry-run
@@ -112,7 +141,7 @@ Exit code `0` only means the artifact matches the contract. It does not mean the
 
 ### Run a demo
 
-The public repository has no live user-simulation demo. A local synthetic demo was built during development, but its files are not all present in the published `main` snapshot. Do not describe it as a deployed product until the missing files are restored and the demo is republished.
+The public repository has no live user-simulation demo. The development workspace contains a local synthetic demo, but it is not a live service or part of the current public deployment.
 
 If you run any local demo server, bind it to `127.0.0.1` and keep it off the public internet. The demo uses synthetic content and fake model outputs; never point it at private reviews or target labels.
 
@@ -122,11 +151,12 @@ If you run any local demo server, bind it to `127.0.0.1` and keep it off the pub
 - Do not send raw reviews, target labels, prompts, or run artifacts to a third-party model without permission and a defined budget.
 - Do not treat a successful fake run or a passing contract test as evidence of real model quality.
 
-## 5. Where to read more
+## 6. Where to read more
 
 - [Dataset choices and licensing notes](docs/DATASETS.md)
 - [Capabilities, metrics, hallucination checks, and memory](docs/AGENT_CAPABILITIES.md)
 - [Step-by-step development plan and acceptance criteria](docs/DEVELOPMENT_PLAN.md)
+- [Public status report for 2026-10-28](docs/STATUS_2026-10-28.md)
 - [P0 data protocol](docs/P0_IMPLEMENTATION_GUIDE.md) / [P1 reliability workflow](docs/P1_IMPLEMENTATION_GUIDE.md) / [synthetic demo](docs/P3_IMPLEMENTATION_GUIDE.md)
 - [Project B: evaluation and diagnostics](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)
 

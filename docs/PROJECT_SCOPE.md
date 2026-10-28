@@ -2,11 +2,12 @@
 
 ## Why This Repository Exists
 
-The original `review-agent` repository contains the upstream AgentSociety
+The original `review-agent` workspace contains the upstream AgentSociety
 framework history together with the CS245 Track A implementation. This
-repository isolates the personal agent, evaluation scripts, notebook and
-archived results so future work can continue without mixing the upstream
-framework source into the project history.
+repository isolates the personal generation agent and public evaluation
+helpers so future work can continue without mixing the upstream framework
+source into the project history. Raw data, notebooks, prompts, private
+outputs, and per-record results stay in Drive/Colab and are not published.
 
 ## Personal Work Inventory
 
@@ -18,10 +19,10 @@ framework source into the project history.
 | `memory_audit.py` | No-LLM redacted audit, prompt-trace checks and temporal manifests | Personal evaluation tooling |
 | `temporal_context.py` | Fail-closed manifest revalidation, current-source context reconstruction and serial offline ablation prototype | Personal offline evaluation tooling; not a Simulator adapter |
 | `inspect_agent_output.py` | Interactive task-level output inspection and error display | Personal tooling |
-| `final_project.ipynb` | Course experiment notebook and execution record | Personal experiment artifact |
-| `ablation_results_yelp_clean.json` | Yelp archived metrics | Personal experiment result |
-| `ablation_results_amazon_clean.json` | Amazon archived metrics | Personal experiment result |
-| `ablation_results_goodreads_clean.json` | Goodreads archived metrics | Personal experiment result |
+| `final_project.ipynb` | Course experiment notebook and execution record | Private Drive/Colab artifact; intentionally excluded |
+| `ablation_results_yelp_clean.json` | Yelp archived metrics | Private experiment output; intentionally excluded |
+| `ablation_results_amazon_clean.json` | Amazon archived metrics | Private experiment output; intentionally excluded |
+| `ablation_results_goodreads_clean.json` | Goodreads archived metrics | Private experiment output; intentionally excluded |
 
 The simulator framework, course examples, task assets and data-processing
 utilities from the original workspace are not claimed as personal code here.

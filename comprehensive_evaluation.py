@@ -68,6 +68,19 @@ class DeepSeekEmbeddingModel:
         return self._api_embed([text])[0]
 
 
+class LLMTransportError(RuntimeError):
+    """Typed transport failure for the legacy Simulator LLM client.
+
+    The exception carries only a stable, safe code. Response bodies, URLs,
+    headers, API keys, file paths and exception messages are never attached
+    or printed.
+    """
+
+    def __init__(self, code: str = "transport_error"):
+        self.code = code
+        super().__init__(code)
+
+
 class DeepSeekLLM:
     def __init__(self, api_key: str, base_url: str = "https://api.deepseek.com/v1",
                  chat_model: str = "deepseek-chat", embedding_model: str = "deepseek-embedding",
@@ -78,7 +91,15 @@ class DeepSeekLLM:
         self.embedding_model = embedding_model
         self.seed = seed
         self.json_mode = json_mode
-        self.usage = {"calls": 0, "errors": 0, "latency_seconds": 0.0}
+        self.usage = {
+            "calls": 0,
+            "errors": 0,
+            "latency_seconds": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "token_usage_available": False,
+        }
 
     def _build_payload(self, messages, temperature, max_tokens):
         payload = {
@@ -110,13 +131,32 @@ class DeepSeekLLM:
             resp = requests.post(url, json=payload, headers=headers, timeout=60)
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
-        except Exception as e:
+            content = data["choices"][0]["message"]["content"]
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                prompt_tokens = usage.get("prompt_tokens")
+                completion_tokens = usage.get("completion_tokens")
+                total_tokens = usage.get("total_tokens")
+                if all(
+                    isinstance(value, int) and value >= 0
+                    for value in (prompt_tokens, completion_tokens, total_tokens)
+                ):
+                    self.usage["prompt_tokens"] += prompt_tokens
+                    self.usage["completion_tokens"] += completion_tokens
+                    self.usage["total_tokens"] += total_tokens
+                    self.usage["token_usage_available"] = True
+        except Exception:
             self.usage["errors"] += 1
-            print(f"❌ Chat API 错误: {e}")
-            return "（API 错误）"
+            # A transport failure is a typed failure, not a completion: the
+            # caller (or the agent workflow) decides what to do, and no error
+            # text can be mistaken for model output or reach memory.
+            raise LLMTransportError("transport_error") from None
         finally:
             self.usage["latency_seconds"] += time.time() - started
+        if not isinstance(content, str) or not content.strip():
+            self.usage["errors"] += 1
+            raise LLMTransportError("empty_completion")
+        return content
 
     def get_embedding_model(self):
         return DeepSeekEmbeddingModel(

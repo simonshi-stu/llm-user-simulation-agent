@@ -1,7 +1,9 @@
 """Offline tests for the DeepSeek client wrapper."""
 
+import pytest
+
 import comprehensive_evaluation
-from comprehensive_evaluation import DeepSeekLLM
+from comprehensive_evaluation import DeepSeekLLM, LLMTransportError
 
 
 class FakeResponse:
@@ -58,11 +60,16 @@ def test_usage_stats_count_errors(monkeypatch):
     llm = DeepSeekLLM(api_key="k")
 
     def failing_post(url, json=None, headers=None, timeout=None):
-        raise RuntimeError("network down")
+        raise RuntimeError("network down at https://secret.invalid/path")
 
     monkeypatch.setattr(comprehensive_evaluation.requests, "post", failing_post)
 
-    result = llm([])
+    # A transport failure must be a typed, safe failure, not an "API error"
+    # completion that could be parsed or stored as model output.
+    with pytest.raises(LLMTransportError) as excinfo:
+        llm([])
 
-    assert "API" in result
+    assert excinfo.value.code == "transport_error"
+    assert "secret.invalid" not in str(excinfo.value)
+    assert "network down" not in str(excinfo.value)
     assert llm.usage_stats()["errors"] == 1

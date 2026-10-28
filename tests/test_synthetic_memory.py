@@ -20,12 +20,17 @@ SYNTHETIC_TASKS = (
 
 
 def run_synthetic_ablation(use_memory):
-    """Run repeated-user tasks and return prompts, outputs and the store."""
+    """Run repeated-user tasks and return prompts, outputs and the store.
+
+    The generated texts deliberately share no 8-gram with the fixture's
+    reference/history texts, so the quality gate accepts them and this test
+    isolates user-scoped recall.
+    """
     responses = [
-        '{"stars": 4.0, "review": "Synthetic review A."}',
-        '{"stars": 3.0, "review": "Synthetic review B."}',
-        '{"stars": 5.0, "review": "Other user review."}',
-        '{"stars": 2.0, "review": "Synthetic review D."}',
+        '{"stars": 4.0, "review": "Distinct generated remark one."}',
+        '{"stars": 3.0, "review": "Distinct generated remark two."}',
+        '{"stars": 5.0, "review": "Another shopper remark about item c."}',
+        '{"stars": 2.0, "review": "Distinct generated remark four."}',
     ]
     llm = FakeLLM(responses)
     store = LocalMemoryStore()
@@ -65,24 +70,24 @@ def test_repeated_user_memory_is_visible_and_user_scoped():
 
     assert MEMORY_MARKER not in prompts[0]
     assert MEMORY_MARKER in prompts[1]
-    assert "Synthetic review A." in prompts[1]
+    assert "Distinct generated remark one." in prompts[1]
     assert MEMORY_MARKER not in prompts[2]
-    assert "Synthetic review A." not in prompts[2]
+    assert "Distinct generated remark one." not in prompts[2]
     assert MEMORY_MARKER in prompts[3]
-    assert "Synthetic review B." in prompts[3]
-    assert "Synthetic review A." in prompts[3]
+    assert "Distinct generated remark two." in prompts[3]
+    assert "Distinct generated remark one." in prompts[3]
 
     assert full["memory_prompt_hits"] == 2
     assert [
         entry.text for entry in full["store"].recall(REPEATED_USER)
     ] == [
-        "Synthetic review D.",
-        "Synthetic review B.",
-        "Synthetic review A.",
+        "Distinct generated remark four.",
+        "Distinct generated remark two.",
+        "Distinct generated remark one.",
     ]
     assert [
         entry.text for entry in full["store"].recall(OTHER_USER)
-    ] == ["Other user review."]
+    ] == ["Another shopper remark about item c."]
 
 
 def test_repeated_user_no_memory_ablation_has_no_memory_effect():

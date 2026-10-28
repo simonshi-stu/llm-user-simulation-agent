@@ -1,6 +1,15 @@
 # Third-Party Notices
 
-This repository depends on the following external project:
+This repository acknowledges the following upstream projects and directly
+depends on the AgentSocietyChallenge-provided package below:
+
+## AgentSociety
+
+- Repository: [tsinghua-fib-lab/AgentSociety](https://github.com/tsinghua-fib-lab/AgentSociety)
+- Role: wider LLM social-simulation research platform acknowledged by this
+  project and used as the upstream research context for the earlier Agent A
+  work.
+- This repository does not vendor or install AgentSociety itself.
 
 ## websocietysimulator
 

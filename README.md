@@ -8,8 +8,8 @@
 
 ## 0. 引用与致谢
 
-- **[AgentSociety](https://github.com/tsinghua-fib-lab/AgentSociety)**（清华大学 FIB Lab）。更广泛的 LLM 社会模拟研究平台；本仓库没有复制或内嵌 AgentSociety 本身。
-- **[AgentSocietyChallenge](https://github.com/tsinghua-fib-lab/AgentSocietyChallenge)**（清华大学 FIB Lab，MIT License）。项目直接依赖的模拟框架：通过 PyPI 安装 `websocietysimulator==1.0.0a30`，使用其模拟环境、Agent 基类、任务交互工具和框架评测接口。
+- **[AgentSociety](https://github.com/tsinghua-fib-lab/AgentSociety)**（清华大学 FIB Lab）。本项目明确致谢并沿用其 LLM 社会模拟研究语境；本仓库没有复制或内嵌 AgentSociety 本身。
+- **[AgentSocietyChallenge](https://github.com/tsinghua-fib-lab/AgentSocietyChallenge)**（清华大学 FIB Lab，MIT License）。早期 Agent A 课程链路调用的直接框架：通过 PyPI 安装 `websocietysimulator==1.0.0a30`，使用其模拟环境、Agent 基类、任务交互工具和框架评测接口。
 - **Amazon Product Data（2014）Musical Instruments 5-core 评论**，由加州大学圣地亚哥分校 Julian McAuley 团队维护，数据入口在[这里](https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html)。本仓库不分发原始评论、目标标签或私有运行文件。“网上可以下载”不等于可以自由再分发或商用。
 - **[项目 B：Amazon 评论评测与诊断](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)**。同一项工作的独立评测侧。
 
@@ -61,24 +61,43 @@ LLM 初稿 -> 校验 -> 必要时最多修复一次
 
 ## 3. 项目目前做到哪一步？
 
-**已经能用**
+**本次公开快照已包含**
 
-- 保留原 AgentSociety 课程链路：用户画像、参考评论排序、条件反思／修复，以及课程评测入口。
-- 本地核验过 Amazon 乐器数据：10,261 条评论、400 个目标任务和四种固定统计基线。数据只留在本地，不再分发。
-- 新增的可靠工作流有离线测试覆盖：受限证据、四种结果状态、最多一次修复、调用预算，以及只在成功时写 Memory。
-- 版本化的 `simulation_run.v1` 结果契约和本地合成导出入口，已经和评测项目做过独立检查。应用代码**还没有发布到公开 `main`**。
-- 本地做过一个合成浏览器 Demo，用 fake 数据和模型输出测试过。它不是在线服务，也不在当前公开部署里。
+- 保留 AgentSocietyChallenge 链路：用户画像、参考评论排序、条件反思／修复，以及课程评测入口。
+- 发布 Agent A 的可靠生成侧代码：`improved_agent_with_quality.py`、`temporal_context.py`、`comprehensive_evaluation.py`、`local_memory.py` 和隐私审计工具。
+- 发布 Amazon 乐器源适配与时间安全 runner：`amazon_p0.py`、`amazon_full_evaluation.py`、`rating_baselines.py`。支持旧/新字段和秒、毫秒、微秒、纳秒时间戳，并把失败记录归为明确状态。
+- 在 Drive/Colab 原始源上完成 source-only dry-run：解析 `3,017,439` 行，有效 `3,017,381` 行，`58` 行因 `invalid_timestamp` 明确拒绝；有效日期为 `2001-09-17` 至 `2023-09-12`。原始数据没有进入仓库。
+- 离线验证覆盖传输失败隔离、解析状态、时间安全、Memory 闸门、评分基线和隐私边界；这些验证不等于真实模型质量。
+- 2026-10-28 在公开仓库快照上运行离线测试：`186 passed`；没有调用真实模型。
 
 **还没有完成**
 
-- 没有跑新版真实 LLM 评测，所以目前没有新的准确率、风格、成本或延迟成绩。
+- 没有完成当前 GPT-5.6 Luna 的真实全量 LLM 评测，所以目前没有新的准确率、风格、成本或延迟成绩。
+- 之前的 DeepSeek 部分运行已停止，不能当作完整评测结果；后续全量评测不使用 DeepSeek。
 - 没有做真人风格评审，也没有评“评分和评论是否一致”。
 - Memory 只在单次运行内有效，重启就没了，也没有测出收益。
-- 公开仓库和本地开发目录不是同一个快照。本地能跑的命令，fresh clone 不一定有。
+- 当前公开仓库发布的是生成侧；独立评测侧仍在 [项目 B](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)。
 
-一句话：**工程骨架和离线检查是真的；但“模拟得准不准、够不够个性化”还没有证据。**
+一句话：**源解析和离线工程检查已有可复核结果；当前模型的全量质量仍没有证据。**
 
-## 4. 怎么使用？
+## 4. 当前开发路径与 A/B 合并范围
+
+开发 workspace 将以下内容放在同一套验收上下文中：
+
+- **A：生成侧**：用户画像、参考评论、条件反思／修复、运行内 Memory、时间安全上下文、Amazon 源适配和四种确定性评分基线。
+- **B：评测侧**：独立结果契约、评分/覆盖/失败诊断、证据约束和导出验收；B 的代码和 Git 历史仍保留在独立仓库。
+- **公共边界**：只交换版本化预测结果和诊断，不交换目标标签、Prompt、原始评论或逐记录私有输出。
+
+这次发布是**经过审查的源码快照整合，不是把两个仓库的 Git 历史合并**。本仓库发布 A 侧代码和公开说明；项目 B 不会因为开发 workspace 的组合而变成这个仓库的一部分。
+
+下一步按以下顺序进行：
+
+1. 已完成：源字段/时间归一化、source-only 全量解析验证、离线安全测试和公开文档更新。
+2. 明天：先取得私有的当前 GPT-5.6 Luna 批量调用路径，固定 max/Absolute 配置、预算、数据外发许可和停止条件；未取得前不调用真实模型。
+3. 批量评测：仅在 Drive/Colab 保存 raw、标签、Prompt、模型输出和逐记录结果；只向公开仓库发布去标识的汇总状态。
+4. 独立交给项目 B 评分和诊断，再做有/无 Memory 的同任务配对；没有分母和覆盖率时不报告收益。
+
+## 5. 怎么使用？
 
 这里**没有插件，也没有在线后端**。它是一个本地运行的 Python 项目，也可以在 notebook／Colab 里跑。真实生成需要接 LLM；测试和契约路径使用 fake，不需要 API key。
 
@@ -93,9 +112,19 @@ python -m pytest -q
 
 上游框架从 PyPI 安装，没有复制进本仓库。API key 放在本地 `.env` 或环境变量里，不要提交到仓库。
 
+### 运行已发布的 source-only 预览
+
+原始源必须位于本地受控的 Drive/Colab staging 目录；下面的命令不调用 LLM，也不把源文件复制到仓库：
+
+```powershell
+python amazon_full_evaluation.py --raw-root "<Drive/Colab raw-root>" --dry-run
+```
+
+完整模型运行暂不提供公开命令，等待当前模型的私有批量接口和批准配置。
+
 ### 运行本地的结果契约预览
 
-下面的命令属于本地开发目录，不属于当前公开 `main`：
+下面的命令属于更宽的本地开发 workspace，不属于当前公开 `main`：
 
 ```powershell
 python -m user_simulator_project --dry-run
@@ -112,7 +141,7 @@ python -m amazon_eval_agent validate --input "<绝对路径>/simulation_run.v1.j
 
 ### 运行 Demo
 
-公开仓库没有在线用户模拟 Demo。开发时做过一个本地合成 Demo，但当前公开的 `main` 快照里缺少部分文件。在文件补齐并重新发布之前，不要把它说成已经上线的产品。
+公开仓库没有在线用户模拟 Demo。开发 workspace 做过本地合成 Demo，但它不是在线服务，也不是当前公开部署。
 
 如果本地要起 Demo 服务，只绑定 `127.0.0.1`，不要暴露到公网。Demo 只用合成内容和 fake 模型输出，不能接真实评论或目标标签。
 
@@ -122,11 +151,12 @@ python -m amazon_eval_agent validate --input "<绝对路径>/simulation_run.v1.j
 - 未经许可、没有明确预算，不要把原始评论、目标标签、Prompt 或运行结果发给第三方模型。
 - 不要把 fake 跑通或契约测试通过，当成真实模型效果。
 
-## 5. 继续阅读
+## 6. 继续阅读
 
 - [数据集选择与许可说明](docs/DATASETS.md)
 - [能力、指标、幻觉检查与 Memory](docs/AGENT_CAPABILITIES.md)
 - [分步开发计划与验收标准](docs/DEVELOPMENT_PLAN.md)
+- [2026-10-28 公开状态报告](docs/STATUS_2026-10-28.md)
 - [P0 数据协议](docs/P0_IMPLEMENTATION_GUIDE.md) / [P1 可靠工作流](docs/P1_IMPLEMENTATION_GUIDE.md) / [合成 Demo](docs/P3_IMPLEMENTATION_GUIDE.md)
 - [项目 B：评测与诊断](https://github.com/simonshi-stu/amazon-instruments-evaluation-agent)
 
