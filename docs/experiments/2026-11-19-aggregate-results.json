@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "record_date": "2026-11-19",
+  "source_audit": {
+    "scope": "Source-only parsing; not a training or evaluation sample",
+    "parsed_rows": 3017439,
+    "valid_rows": 3017381,
+    "invalid_timestamp_rows": 58
+  },
+  "cpu_rating_reproduction": {
+    "status": "completed",
+    "dataset": "Amazon Musical Instruments 5-core (bounded sample)",
+    "parsed_rows": 10254,
+    "seed": 20261119,
+    "splits": {
+      "train": 256,
+      "validation": 64,
+      "test": 64
+    },
+    "model": {
+      "type": "from-scratch tiny causal next-token LM with fixed byte features",
+      "parameters": 37603,
+      "pretrained": false
+    },
+    "scoring": {
+      "labels_separate": true,
+      "outputs_frozen_before_scoring": true,
+      "id_alignment_verified": true,
+      "scale_stars": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "constrained": {
+        "tiny_lm": {
+          "valid": 64,
+          "total": 64,
+          "mae": 0.640625,
+          "rmse": 1.165922381636102
+        },
+        "deterministic_history_baseline": {
+          "valid": 64,
+          "total": 64,
+          "mae": 0.65625,
+          "rmse": 1.14564392373896
+        }
+      },
+      "free_generation": {
+        "tiny_lm_valid": 0,
+        "total": 64,
+        "mae": null,
+        "rmse": null
+      }
+    },
+    "scope_limits": [
+      "Single seeded CPU experiment; rating only, no review-text quality result",
+      "MAE slightly lower and RMSE higher than the history baseline; no overall superiority claim"
+    ]
+  },
+  "formal_review_only_training": {
+    "model": "Qwen3-4B-Instruct-2507",
+    "method": "QLoRA",
+    "frozen_training_examples": 698727,
+    "last_verified_recoverable_checkpoint_step": 4292,
+    "checkpoint_sample_cursor": 34336,
+    "holdout_quality_metrics_available": false
+  },
+  "joint_4b_rating_review_pilot": {
+    "status": "blocked",
+    "blocker": "No usable pinned local model and no connected Colab runtime at verification",
+    "training_completed": false,
+    "inference_completed": false,
+    "holdout_quality_metrics_available": false
+  }
+}
